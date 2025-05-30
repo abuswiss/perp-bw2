@@ -1,10 +1,15 @@
-import db from '@/lib/db';
+import { supabaseAdmin } from '@/lib/supabase/client';
 
 export const GET = async (req: Request) => {
   try {
-    let chats = await db.query.chats.findMany();
-    chats = chats.reverse();
-    return Response.json({ chats: chats }, { status: 200 });
+    const { data: chats, error } = await supabaseAdmin
+      .from('legal_chats')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    return Response.json({ chats: chats || [] }, { status: 200 });
   } catch (err) {
     console.error('Error in getting chats: ', err);
     return Response.json(

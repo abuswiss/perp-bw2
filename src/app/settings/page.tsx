@@ -515,7 +515,7 @@ const Page = () => {
             <SettingsSection title="System Instructions">
               <div className="flex flex-col space-y-4">
                 <Textarea
-                  value={systemInstructions}
+                  value={systemInstructions ?? ""}
                   isSaving={savingStates['systemInstructions']}
                   onChange={(e) => {
                     setSystemInstructions(e.target.value);

@@ -1,0 +1,12 @@
+# SearXNG limiter configuration
+# Disable bot detection for API access
+
+[botdetection.ip_limit]
+# Allow unlimited API requests from localhost
+filter_link_local = false
+max_requests = 1000
+
+[botdetection.ip_lists]
+# Allow localhost and private networks
+allow_localhost = true
+allow_private_networks = true

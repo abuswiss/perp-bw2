@@ -59,7 +59,12 @@ const Chat = ({
     if (messages[messages.length - 1]?.role == 'user') {
       scroll();
     }
-  }, [messages]);
+    
+    // Auto-scroll during streaming
+    if (loading && messageAppeared) {
+      scroll();
+    }
+  }, [messages, loading, messageAppeared]);
 
   return (
     <div className="flex flex-col space-y-6 pt-8 pb-44 lg:pb-32 sm:mx-4 md:mx-8">
@@ -69,7 +74,6 @@ const Chat = ({
         return (
           <Fragment key={msg.messageId}>
             <MessageBox
-              key={i}
               message={msg}
               messageIndex={i}
               history={messages}
@@ -99,6 +103,7 @@ const Chat = ({
             setFileIds={setFileIds}
             files={files}
             setFiles={setFiles}
+            messages={messages}
           />
         </div>
       )}

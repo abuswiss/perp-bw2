@@ -1,9 +1,10 @@
 import MetaSearchAgent from '@/lib/search/metaSearchAgent';
 import prompts from '../prompts';
+import { LegalAgentAdapter } from './legalAgentAdapter';
 
 export const searchHandlers: Record<string, MetaSearchAgent> = {
   webSearch: new MetaSearchAgent({
-    activeEngines: [],
+    activeEngines: ['searxng'],
     queryGeneratorPrompt: prompts.webSearchRetrieverPrompt,
     responsePrompt: prompts.webSearchResponsePrompt,
     rerank: true,
@@ -35,15 +36,6 @@ export const searchHandlers: Record<string, MetaSearchAgent> = {
     responsePrompt: prompts.wolframAlphaSearchResponsePrompt,
     rerank: false,
     rerankThreshold: 0,
-    searchWeb: true,
-    summarizer: false,
-  }),
-  youtubeSearch: new MetaSearchAgent({
-    activeEngines: ['youtube'],
-    queryGeneratorPrompt: prompts.youtubeSearchRetrieverPrompt,
-    responsePrompt: prompts.youtubeSearchResponsePrompt,
-    rerank: true,
-    rerankThreshold: 0.3,
     searchWeb: true,
     summarizer: false,
   }),

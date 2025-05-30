@@ -5,6 +5,7 @@ import CopilotToggle from './MessageInputActions/Copilot';
 import Focus from './MessageInputActions/Focus';
 import Optimization from './MessageInputActions/Optimization';
 import Attach from './MessageInputActions/Attach';
+import MatterSelector from './MessageInputActions/MatterSelector';
 import { File } from './ChatWindow';
 
 const EmptyChatMessageInput = ({
@@ -17,6 +18,8 @@ const EmptyChatMessageInput = ({
   setFileIds,
   files,
   setFiles,
+  selectedMatterId,
+  setSelectedMatterId,
 }: {
   sendMessage: (message: string) => void;
   focusMode: string;
@@ -27,6 +30,8 @@ const EmptyChatMessageInput = ({
   setFileIds: (fileIds: string[]) => void;
   files: File[];
   setFiles: (files: File[]) => void;
+  selectedMatterId: string | null;
+  setSelectedMatterId: (matterId: string | null) => void;
 }) => {
   const [copilotEnabled, setCopilotEnabled] = useState(false);
   const [message, setMessage] = useState('');
@@ -73,7 +78,7 @@ const EmptyChatMessageInput = ({
       }}
       className="w-full"
     >
-      <div className="flex flex-col bg-light-secondary dark:bg-dark-secondary px-5 pt-5 pb-2 rounded-lg w-full border border-light-200 dark:border-dark-200">
+      <div className="flex flex-col bg-light-secondary dark:bg-dark-secondary px-5 pt-5 pb-2 rounded-lg w-full max-w-4xl border border-light-200 dark:border-dark-200">
         <TextareaAutosize
           ref={inputRef}
           value={message}
@@ -83,8 +88,12 @@ const EmptyChatMessageInput = ({
           placeholder="Ask anything..."
         />
         <div className="flex flex-row items-center justify-between mt-4">
-          <div className="flex flex-row items-center space-x-2 lg:space-x-4">
+          <div className="flex flex-row items-center space-x-3 lg:space-x-6">
             <Focus focusMode={focusMode} setFocusMode={setFocusMode} />
+            <MatterSelector 
+              selectedMatterId={selectedMatterId}
+              setSelectedMatterId={setSelectedMatterId}
+            />
             <Attach
               fileIds={fileIds}
               setFileIds={setFileIds}
@@ -93,11 +102,14 @@ const EmptyChatMessageInput = ({
               showText
             />
           </div>
-          <div className="flex flex-row items-center space-x-1 sm:space-x-4">
-            <Optimization
-              optimizationMode={optimizationMode}
-              setOptimizationMode={setOptimizationMode}
-            />
+          <div className="flex flex-row items-center space-x-2 sm:space-x-4">
+            {/* Only show optimization for non-legal modes */}
+            {!['legalResearch', 'briefWriting', 'discovery', 'contractAnalysis'].includes(focusMode) && (
+              <Optimization
+                optimizationMode={optimizationMode}
+                setOptimizationMode={setOptimizationMode}
+              />
+            )}
             <button
               disabled={message.trim().length === 0}
               className="bg-[#24A0ED] text-white disabled:text-black/50 dark:disabled:text-white/50 disabled:bg-[#e0e0dc] dark:disabled:bg-[#ececec21] hover:bg-opacity-85 transition duration-100 rounded-full p-2"

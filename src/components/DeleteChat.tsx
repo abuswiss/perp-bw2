@@ -36,9 +36,12 @@ const DeleteChat = ({
         },
       });
 
-      if (res.status != 200) {
+      if (res.status != 200 && res.status != 404) {
         throw new Error('Failed to delete chat');
       }
+      
+      // If 404, the chat doesn't exist in Supabase (probably an old SQLite chat)
+      // We can still remove it from the UI
 
       const newChats = chats.filter((chat) => chat.id !== chatId);
 

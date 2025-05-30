@@ -25,6 +25,11 @@ export const searchSearxng = async (
 ) => {
   const searxngURL = getSearxngApiEndpoint();
 
+  // If no SearXNG URL is configured, throw an error to trigger fallback
+  if (!searxngURL || searxngURL.trim() === '') {
+    throw new Error('SearXNG API endpoint not configured');
+  }
+
   const url = new URL(`${searxngURL}/search?format=json`);
   url.searchParams.append('q', query);
 

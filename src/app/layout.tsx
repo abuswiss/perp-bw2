@@ -2,9 +2,10 @@ import type { Metadata } from 'next';
 import { Montserrat } from 'next/font/google';
 import './globals.css';
 import { cn } from '@/lib/utils';
-import Sidebar from '@/components/Sidebar';
+import LegalSidebar from '@/components/LegalSidebar';
 import { Toaster } from 'sonner';
 import ThemeProvider from '@/components/theme/Provider';
+import { MatterProvider } from '@/contexts/MatterContext';
 
 const montserrat = Montserrat({
   weight: ['300', '400', '500', '700'],
@@ -14,9 +15,9 @@ const montserrat = Montserrat({
 });
 
 export const metadata: Metadata = {
-  title: 'Perplexica - Chat with the internet',
+  title: 'BenchWise - AI Legal Research Assistant',
   description:
-    'Perplexica is an AI powered chatbot that is connected to the internet.',
+    'BenchWise is an AI-powered legal research platform for legal professionals.',
 };
 
 export default function RootLayout({
@@ -28,16 +29,18 @@ export default function RootLayout({
     <html className="h-full" lang="en" suppressHydrationWarning>
       <body className={cn('h-full', montserrat.className)}>
         <ThemeProvider>
-          <Sidebar>{children}</Sidebar>
-          <Toaster
-            toastOptions={{
-              unstyled: true,
-              classNames: {
-                toast:
-                  'bg-light-primary dark:bg-dark-secondary dark:text-white/70 text-black-70 rounded-lg p-4 flex flex-row items-center space-x-2',
-              },
-            }}
-          />
+          <MatterProvider>
+            <LegalSidebar>{children}</LegalSidebar>
+            <Toaster
+              toastOptions={{
+                unstyled: true,
+                classNames: {
+                  toast:
+                    'bg-light-primary dark:bg-dark-secondary dark:text-white/70 text-black-70 rounded-lg p-4 flex flex-row items-center space-x-2',
+                },
+              }}
+            />
+          </MatterProvider>
         </ThemeProvider>
       </body>
     </html>

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import TextareaAutosize from 'react-textarea-autosize';
 import Attach from './MessageInputActions/Attach';
 import CopilotToggle from './MessageInputActions/Copilot';
-import { File } from './ChatWindow';
+import { File, Message } from './ChatWindow';
 import AttachSmall from './MessageInputActions/AttachSmall';
 
 const MessageInput = ({
@@ -14,6 +14,7 @@ const MessageInput = ({
   setFileIds,
   files,
   setFiles,
+  messages,
 }: {
   sendMessage: (message: string) => void;
   loading: boolean;
@@ -21,8 +22,9 @@ const MessageInput = ({
   setFileIds: (fileIds: string[]) => void;
   files: File[];
   setFiles: (files: File[]) => void;
+  messages?: Message[];
 }) => {
-  const [copilotEnabled, setCopilotEnabled] = useState(false);
+  const [copilotEnabled, setCopilotEnabled] = useState(true);
   const [message, setMessage] = useState('');
   const [textareaRows, setTextareaRows] = useState(1);
   const [mode, setMode] = useState<'multi' | 'single'>('single');
@@ -59,26 +61,28 @@ const MessageInput = ({
     };
   }, []);
 
+  // Suggestions are now handled in MessageBox, not here
+
   return (
-    <form
-      onSubmit={(e) => {
-        if (loading) return;
-        e.preventDefault();
-        sendMessage(message);
-        setMessage('');
-      }}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' && !e.shiftKey && !loading) {
+      <form
+        onSubmit={(e) => {
+          if (loading) return;
           e.preventDefault();
           sendMessage(message);
           setMessage('');
-        }
-      }}
-      className={cn(
-        'bg-light-secondary dark:bg-dark-secondary p-4 flex items-center overflow-hidden border border-light-200 dark:border-dark-200',
-        mode === 'multi' ? 'flex-col rounded-lg' : 'flex-row rounded-full',
-      )}
-    >
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !e.shiftKey && !loading) {
+            e.preventDefault();
+            sendMessage(message);
+            setMessage('');
+          }
+        }}
+        className={cn(
+          'bg-light-secondary dark:bg-dark-secondary p-4 flex items-center overflow-hidden border border-light-200 dark:border-dark-200',
+          mode === 'multi' ? 'flex-col rounded-lg' : 'flex-row rounded-full',
+        )}
+      >
       {mode === 'single' && (
         <AttachSmall
           fileIds={fileIds}
@@ -133,7 +137,7 @@ const MessageInput = ({
           </div>
         </div>
       )}
-    </form>
+      </form>
   );
 };
 

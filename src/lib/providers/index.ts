@@ -137,3 +137,73 @@ export const getAvailableEmbeddingModelProviders = async () => {
 
   return models;
 };
+
+/**
+ * Get a default chat model for AI agent use
+ * Prefers GPT-4o for legal research and analysis
+ */
+export const getDefaultChatModel = async (): Promise<BaseChatModel | null> => {
+  try {
+    const chatModelProviders = await getAvailableChatModelProviders();
+    
+    // Try custom OpenAI first if configured
+    const customOpenAiApiKey = getCustomOpenaiApiKey();
+    const customOpenAiApiUrl = getCustomOpenaiApiUrl();
+    const customOpenAiModelName = getCustomOpenaiModelName();
+    
+    if (customOpenAiApiKey && customOpenAiApiUrl && customOpenAiModelName) {
+      return new ChatOpenAI({
+        modelName: customOpenAiModelName,
+        openAIApiKey: customOpenAiApiKey,
+        temperature: 0.7,
+        configuration: {
+          baseURL: customOpenAiApiUrl,
+        },
+      }) as unknown as BaseChatModel;
+    }
+    
+    // Prefer GPT-4o for legal work if available
+    if (chatModelProviders.openai && chatModelProviders.openai['gpt-4o']) {
+      console.log('🤖 Using GPT-4o for legal research');
+      return chatModelProviders.openai['gpt-4o'].model as BaseChatModel;
+    }
+    
+    // Fallback to GPT-4 turbo if GPT-4o not available
+    if (chatModelProviders.openai && chatModelProviders.openai['gpt-4-turbo']) {
+      return chatModelProviders.openai['gpt-4-turbo'].model as BaseChatModel;
+    }
+    
+    // Fallback to regular GPT-4 
+    if (chatModelProviders.openai && chatModelProviders.openai['gpt-4']) {
+      return chatModelProviders.openai['gpt-4'].model as BaseChatModel;
+    }
+    
+    // Last resort: try any available OpenAI model
+    if (chatModelProviders.openai) {
+      const openaiModels = Object.keys(chatModelProviders.openai);
+      if (openaiModels.length > 0) {
+        const firstModel = chatModelProviders.openai[openaiModels[0]];
+        if (firstModel?.model) {
+          return firstModel.model as BaseChatModel;
+        }
+      }
+    }
+    
+    // Try other providers as final fallback
+    for (const [providerKey, provider] of Object.entries(chatModelProviders)) {
+      if (providerKey === 'openai') continue; // Already tried above
+      const modelKeys = Object.keys(provider);
+      if (modelKeys.length > 0) {
+        const firstModel = provider[modelKeys[0]];
+        if (firstModel?.model) {
+          return firstModel.model as BaseChatModel;
+        }
+      }
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('Failed to get default chat model:', error);
+    return null;
+  }
+};

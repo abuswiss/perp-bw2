@@ -17,9 +17,10 @@ import Copy from './MessageActions/Copy';
 import Rewrite from './MessageActions/Rewrite';
 import MessageSources from './MessageSources';
 import SearchImages from './SearchImages';
-import SearchVideos from './SearchVideos';
 import { useSpeech } from 'react-text-to-speech';
 import ThinkBox from './ThinkBox';
+import TaskProgress from './agents/TaskProgress';
+import DocumentActions from './DocumentActions';
 
 const ThinkTagProcessor = ({ children }: { children: React.ReactNode }) => {
   return <ThinkBox content={children as string} />;
@@ -46,6 +47,7 @@ const MessageBox = ({
 }) => {
   const [parsedMessage, setParsedMessage] = useState(message.content);
   const [speechMessage, setSpeechMessage] = useState(message.content);
+  
 
   useEffect(() => {
     const citationRegex = /\[([^\]]+)\]/g;
@@ -162,6 +164,25 @@ const MessageBox = ({
                 </h3>
               </div>
 
+              {/* Show progress message when loading */}
+              {isLast && loading && message.progressMessage && (
+                <div className="mb-4 text-black/70 dark:text-white/70 text-sm flex items-center space-x-2">
+                  <div className="animate-spin w-4 h-4 border-2 border-[#24A0ED] border-t-transparent rounded-full"></div>
+                  <span>{message.progressMessage}</span>
+                </div>
+              )}
+              
+              {/* Show task progress if task ID is available */}
+              {message.taskId && isLast && (
+                <div className="mb-4">
+                  <TaskProgress 
+                    taskId={message.taskId}
+                    onTaskComplete={() => {}}
+                    onTaskError={() => {}}
+                  />
+                </div>
+              )}
+
               <Markdown
                 className={cn(
                   'prose prose-h1:mb-3 prose-h2:mb-2 prose-h2:mt-6 prose-h2:font-[800] prose-h3:mt-4 prose-h3:mb-1.5 prose-h3:font-[600] dark:prose-invert prose-p:leading-relaxed prose-pre:p-0 font-[400]',
@@ -171,6 +192,63 @@ const MessageBox = ({
               >
                 {parsedMessage}
               </Markdown>
+              
+              {/* Show document actions for brief writing */}
+              {!loading && message.role === 'assistant' && message.focusMode === 'briefWriting' && message.content && (
+                <DocumentActions 
+                  content={message.content}
+                  title="Legal Document"
+                />
+              )}
+              
+              {/* Show brief writing refinement suggestions */}
+              {!loading && isLast && message.role === 'assistant' && message.focusMode === 'briefWriting' && (
+                <div className="mt-4 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                  <p className="text-sm text-blue-800 dark:text-blue-200 mb-2">💡 Need to refine this document?</p>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      onClick={() => sendMessage("Make this more persuasive and add stronger legal arguments")}
+                      className="text-xs bg-blue-100 dark:bg-blue-800 hover:bg-blue-200 dark:hover:bg-blue-700 text-blue-800 dark:text-blue-200 px-3 py-1.5 rounded-full transition-colors"
+                    >
+                      Make it more persuasive
+                    </button>
+                    <button
+                      onClick={() => sendMessage("Add more legal citations and case law references")}
+                      className="text-xs bg-blue-100 dark:bg-blue-800 hover:bg-blue-200 dark:hover:bg-blue-700 text-blue-800 dark:text-blue-200 px-3 py-1.5 rounded-full transition-colors"
+                    >
+                      Add more citations
+                    </button>
+                    <button
+                      onClick={() => sendMessage("Make this document shorter and more concise")}
+                      className="text-xs bg-blue-100 dark:bg-blue-800 hover:bg-blue-200 dark:hover:bg-blue-700 text-blue-800 dark:text-blue-200 px-3 py-1.5 rounded-full transition-colors"
+                    >
+                      Make it shorter
+                    </button>
+                    <button
+                      onClick={() => sendMessage("Expand this document with more detailed analysis")}
+                      className="text-xs bg-blue-100 dark:bg-blue-800 hover:bg-blue-200 dark:hover:bg-blue-700 text-blue-800 dark:text-blue-200 px-3 py-1.5 rounded-full transition-colors"
+                    >
+                      Add more detail
+                    </button>
+                  </div>
+                </div>
+              )}
+              
+              {/* Show copilot suggestions after message content - only for non-legal modes */}
+              {!loading && isLast && message.role === 'assistant' && message.suggestions && message.suggestions.length > 0 && 
+               message.focusMode !== 'legalResearch' && message.focusMode !== 'briefWriting' && (
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {message.suggestions.map((suggestion, index) => (
+                    <button
+                      key={index}
+                      onClick={() => sendMessage(suggestion)}
+                      className="text-xs bg-light-100 dark:bg-dark-100 hover:bg-light-200 dark:hover:bg-dark-200 text-black dark:text-white px-3 py-1.5 rounded-full transition-colors"
+                    >
+                      {suggestion}
+                    </button>
+                  ))}
+                </div>
+              )}
               {loading && isLast ? null : (
                 <div className="flex flex-row items-center justify-between w-full text-black dark:text-white py-4 -mx-2">
                   <div className="flex flex-row items-center space-x-1">
@@ -241,18 +319,16 @@ const MessageBox = ({
                 )}
             </div>
           </div>
-          <div className="lg:sticky lg:top-20 flex flex-col items-center space-y-3 w-full lg:w-3/12 z-30 h-full pb-4">
-            <SearchImages
-              query={history[messageIndex - 1].content}
-              chatHistory={history.slice(0, messageIndex - 1)}
-              messageId={message.messageId}
-            />
-            <SearchVideos
-              chatHistory={history.slice(0, messageIndex - 1)}
-              query={history[messageIndex - 1].content}
-              messageId={message.messageId}
-            />
-          </div>
+          {/* Hide search components for brief writing mode */}
+          {message.focusMode !== 'briefWriting' && (
+            <div className="lg:sticky lg:top-20 flex flex-col items-center space-y-3 w-full lg:w-3/12 z-30 h-full pb-4">
+              <SearchImages
+                query={history[messageIndex - 1].content}
+                chatHistory={history.slice(0, messageIndex - 1)}
+                messageId={message.messageId}
+              />
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -12,6 +12,7 @@ import { Fragment, useState } from 'react';
 
 const MessageSources = ({ sources }: { sources: Document[] }) => {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  
 
   const closeModal = () => {
     setIsDialogOpen(false);
@@ -23,35 +24,36 @@ const MessageSources = ({ sources }: { sources: Document[] }) => {
     document.body.classList.add('overflow-hidden-scrollable');
   };
 
+  // Helper function to get source properties
+  const getSourceProperty = (source: any, prop: string) => {
+    return source.metadata?.[prop] || source[prop];
+  };
+
   return (
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
       {sources.slice(0, 3).map((source, i) => (
         <a
           className="bg-light-100 hover:bg-light-200 dark:bg-dark-100 dark:hover:bg-dark-200 transition duration-200 rounded-lg p-3 flex flex-col space-y-2 font-medium"
           key={i}
-          href={source.metadata.url}
+          href={getSourceProperty(source, 'url') || '#'}
           target="_blank"
         >
           <p className="dark:text-white text-xs overflow-hidden whitespace-nowrap text-ellipsis">
-            {source.metadata.title}
+            {getSourceProperty(source, 'title') || 'Untitled'}
           </p>
           <div className="flex flex-row items-center justify-between">
             <div className="flex flex-row items-center space-x-1">
-              {source.metadata.url === 'File' ? (
+              {getSourceProperty(source, 'url') === 'File' ? (
                 <div className="bg-dark-200 hover:bg-dark-100 transition duration-200 flex items-center justify-center w-6 h-6 rounded-full">
                   <File size={12} className="text-white/70" />
                 </div>
               ) : (
-                <img
-                  src={`https://s2.googleusercontent.com/s2/favicons?domain_url=${source.metadata.url}`}
-                  width={16}
-                  height={16}
-                  alt="favicon"
-                  className="rounded-lg h-4 w-4"
-                />
+                <div className="bg-light-300 dark:bg-dark-300 w-4 h-4 rounded-lg flex items-center justify-center">
+                  <div className="w-2 h-2 bg-black/20 dark:bg-white/20 rounded-full" />
+                </div>
               )}
               <p className="text-xs text-black/50 dark:text-white/50 overflow-hidden whitespace-nowrap text-ellipsis">
-                {source.metadata.url.replace(/.+\/\/|www.|\..+/g, '')}
+                {getSourceProperty(source, 'url')?.replace(/.+\/\/|www.|\..+/g, '') || 'Unknown'}
               </p>
             </div>
             <div className="flex flex-row items-center space-x-1 text-black/50 dark:text-white/50 text-xs">
@@ -68,7 +70,7 @@ const MessageSources = ({ sources }: { sources: Document[] }) => {
         >
           <div className="flex flex-row items-center space-x-1">
             {sources.slice(3, 6).map((source, i) => {
-              return source.metadata.url === 'File' ? (
+              return getSourceProperty(source, 'url') === 'File' ? (
                 <div
                   key={i}
                   className="bg-dark-200 hover:bg-dark-100 transition duration-200 flex items-center justify-center w-6 h-6 rounded-full"
@@ -76,14 +78,12 @@ const MessageSources = ({ sources }: { sources: Document[] }) => {
                   <File size={12} className="text-white/70" />
                 </div>
               ) : (
-                <img
+                <div 
                   key={i}
-                  src={`https://s2.googleusercontent.com/s2/favicons?domain_url=${source.metadata.url}`}
-                  width={16}
-                  height={16}
-                  alt="favicon"
-                  className="rounded-lg h-4 w-4"
-                />
+                  className="bg-light-300 dark:bg-dark-300 w-4 h-4 rounded-lg flex items-center justify-center"
+                >
+                  <div className="w-2 h-2 bg-black/20 dark:bg-white/20 rounded-full" />
+                </div>
               );
             })}
           </div>
@@ -114,32 +114,28 @@ const MessageSources = ({ sources }: { sources: Document[] }) => {
                       <a
                         className="bg-light-secondary hover:bg-light-200 dark:bg-dark-secondary dark:hover:bg-dark-200 border border-light-200 dark:border-dark-200 transition duration-200 rounded-lg p-3 flex flex-col space-y-2 font-medium"
                         key={i}
-                        href={source.metadata.url}
+                        href={getSourceProperty(source, 'url') || '#'}
                         target="_blank"
                       >
                         <p className="dark:text-white text-xs overflow-hidden whitespace-nowrap text-ellipsis">
-                          {source.metadata.title}
+                          {getSourceProperty(source, 'title') || 'Untitled'}
                         </p>
                         <div className="flex flex-row items-center justify-between">
                           <div className="flex flex-row items-center space-x-1">
-                            {source.metadata.url === 'File' ? (
+                            {getSourceProperty(source, 'url') === 'File' ? (
                               <div className="bg-dark-200 hover:bg-dark-100 transition duration-200 flex items-center justify-center w-6 h-6 rounded-full">
                                 <File size={12} className="text-white/70" />
                               </div>
                             ) : (
-                              <img
-                                src={`https://s2.googleusercontent.com/s2/favicons?domain_url=${source.metadata.url}`}
-                                width={16}
-                                height={16}
-                                alt="favicon"
-                                className="rounded-lg h-4 w-4"
-                              />
+                              <div className="bg-light-300 dark:bg-dark-300 w-4 h-4 rounded-lg flex items-center justify-center">
+                                <div className="w-2 h-2 bg-black/20 dark:bg-white/20 rounded-full" />
+                              </div>
                             )}
                             <p className="text-xs text-black/50 dark:text-white/50 overflow-hidden whitespace-nowrap text-ellipsis">
-                              {source.metadata.url.replace(
+                              {getSourceProperty(source, 'url')?.replace(
                                 /.+\/\/|www.|\..+/g,
                                 '',
-                              )}
+                              ) || 'Unknown'}
                             </p>
                           </div>
                           <div className="flex flex-row items-center space-x-1 text-black/50 dark:text-white/50 text-xs">

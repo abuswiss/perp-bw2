@@ -12,10 +12,6 @@ import {
   wolframAlphaSearchRetrieverPrompt,
 } from './wolframAlpha';
 import { writingAssistantPrompt } from './writingAssistant';
-import {
-  youtubeSearchResponsePrompt,
-  youtubeSearchRetrieverPrompt,
-} from './youtubeSearch';
 
 export default {
   webSearchResponsePrompt,
@@ -27,6 +23,4 @@ export default {
   wolframAlphaSearchResponsePrompt,
   wolframAlphaSearchRetrieverPrompt,
   writingAssistantPrompt,
-  youtubeSearchResponsePrompt,
-  youtubeSearchRetrieverPrompt,
 };

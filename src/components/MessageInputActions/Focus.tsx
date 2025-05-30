@@ -5,6 +5,10 @@ import {
   Pencil,
   ScanEye,
   SwatchBook,
+  Scale,
+  FileText,
+  Search,
+  FileCheck,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
@@ -18,40 +22,46 @@ import { Fragment } from 'react';
 
 const focusModes = [
   {
-    key: 'webSearch',
-    title: 'All',
-    description: 'Searches across all of the internet',
-    icon: <Globe size={20} />,
+    key: 'legalResearch',
+    title: 'Legal Research',
+    description: 'Search case law and statutes',
+    icon: <Scale size={20} />,
+  },
+  {
+    key: 'briefWriting',
+    title: 'Brief Writing',
+    description: 'Generate legal documents and briefs',
+    icon: <FileText size={20} />,
+  },
+  {
+    key: 'discovery',
+    title: 'Discovery',
+    description: 'Analyze documents for discovery',
+    icon: <Search size={20} />,
+  },
+  {
+    key: 'contractAnalysis',
+    title: 'Contract Review',
+    description: 'Review and analyze contracts',
+    icon: <FileCheck size={20} />,
   },
   {
     key: 'academicSearch',
-    title: 'Academic',
-    description: 'Search in published academic papers',
+    title: 'Academic Legal',
+    description: 'Search law reviews and legal scholarship',
     icon: <SwatchBook size={20} />,
   },
   {
+    key: 'webSearch',
+    title: 'General Search',
+    description: 'Search across the internet',
+    icon: <Globe size={20} />,
+  },
+  {
     key: 'writingAssistant',
-    title: 'Writing',
-    description: 'Chat without searching the web',
+    title: 'Writing Assistant',
+    description: 'General writing help',
     icon: <Pencil size={16} />,
-  },
-  {
-    key: 'wolframAlphaSearch',
-    title: 'Wolfram Alpha',
-    description: 'Computational knowledge engine',
-    icon: <BadgePercent size={20} />,
-  },
-  {
-    key: 'youtubeSearch',
-    title: 'Youtube',
-    description: 'Search and watch videos',
-    icon: <SiYoutube className="h-5 w-auto mr-0.5" />,
-  },
-  {
-    key: 'redditSearch',
-    title: 'Reddit',
-    description: 'Search for discussions and opinions',
-    icon: <SiReddit className="h-5 w-auto mr-0.5" />,
   },
 ];
 
@@ -68,7 +78,7 @@ const Focus = ({
         type="button"
         className=" text-black/50 dark:text-white/50 rounded-xl hover:bg-light-secondary dark:hover:bg-dark-secondary active:scale-95 transition duration-200 hover:text-black dark:hover:text-white"
       >
-        {focusMode !== 'webSearch' ? (
+        {focusMode !== 'legalResearch' ? (
           <div className="flex flex-row items-center space-x-1">
             {focusModes.find((mode) => mode.key === focusMode)?.icon}
             <p className="text-xs font-medium hidden lg:block">

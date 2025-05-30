@@ -21,6 +21,10 @@ export type Message = {
   role: 'user' | 'assistant';
   suggestions?: string[];
   sources?: Document[];
+  taskId?: string;
+  progressMessage?: string;
+  documentType?: 'brief' | 'contract' | 'memo' | 'motion' | 'other';
+  focusMode?: string;
 };
 
 export interface File {
@@ -52,14 +56,9 @@ const checkConfig = async (
     let embeddingModelProvider = localStorage.getItem('embeddingModelProvider');
 
     const autoImageSearch = localStorage.getItem('autoImageSearch');
-    const autoVideoSearch = localStorage.getItem('autoVideoSearch');
 
     if (!autoImageSearch) {
       localStorage.setItem('autoImageSearch', 'true');
-    }
-
-    if (!autoVideoSearch) {
-      localStorage.setItem('autoVideoSearch', 'false');
     }
 
     const providers = await fetch(`/api/models`, {
@@ -280,8 +279,9 @@ const ChatWindow = ({ id }: { id?: string }) => {
   const [files, setFiles] = useState<File[]>([]);
   const [fileIds, setFileIds] = useState<string[]>([]);
 
-  const [focusMode, setFocusMode] = useState('webSearch');
+  const [focusMode, setFocusMode] = useState('legalResearch');
   const [optimizationMode, setOptimizationMode] = useState('speed');
+  const [selectedMatterId, setSelectedMatterId] = useState<string | null>(null);
 
   const [isMessagesLoaded, setIsMessagesLoaded] = useState(false);
 
@@ -361,6 +361,19 @@ const ChatWindow = ({ id }: { id?: string }) => {
         return;
       }
 
+      if (data.type === 'progress') {
+        // Update loading state with progress message
+        setMessages((prev) =>
+          prev.map((msg) => {
+            if (msg.messageId === data.messageId && msg.role === 'assistant') {
+              return { ...msg, progressMessage: data.data };
+            }
+            return msg;
+          }),
+        );
+        return;
+      }
+
       if (data.type === 'sources') {
         sources = data.data;
         if (!added) {
@@ -373,6 +386,7 @@ const ChatWindow = ({ id }: { id?: string }) => {
               role: 'assistant',
               sources: sources,
               createdAt: new Date(),
+              focusMode: focusMode,
             },
           ]);
           added = true;
@@ -391,6 +405,7 @@ const ChatWindow = ({ id }: { id?: string }) => {
               role: 'assistant',
               sources: sources,
               createdAt: new Date(),
+              focusMode: focusMode,
             },
           ]);
           added = true;
@@ -410,6 +425,18 @@ const ChatWindow = ({ id }: { id?: string }) => {
         setMessageAppeared(true);
       }
 
+      if (data.type === 'taskId') {
+        // Store task ID for progress tracking
+        setMessages((prev) =>
+          prev.map((msg) => {
+            if (msg.messageId === data.messageId) {
+              return { ...msg, taskId: data.data };
+            }
+            return msg;
+          }),
+        );
+      }
+
       if (data.type === 'messageEnd') {
         setChatHistory((prevHistory) => [
           ...prevHistory,
@@ -422,7 +449,6 @@ const ChatWindow = ({ id }: { id?: string }) => {
         const lastMsg = messagesRef.current[messagesRef.current.length - 1];
 
         const autoImageSearch = localStorage.getItem('autoImageSearch');
-        const autoVideoSearch = localStorage.getItem('autoVideoSearch');
 
         if (autoImageSearch === 'true') {
           document
@@ -430,27 +456,25 @@ const ChatWindow = ({ id }: { id?: string }) => {
             ?.click();
         }
 
-        if (autoVideoSearch === 'true') {
-          document
-            .getElementById(`search-videos-${lastMsg.messageId}`)
-            ?.click();
-        }
-
         if (
           lastMsg.role === 'assistant' &&
-          lastMsg.sources &&
-          lastMsg.sources.length > 0 &&
           !lastMsg.suggestions
         ) {
-          const suggestions = await getSuggestions(messagesRef.current);
-          setMessages((prev) =>
-            prev.map((msg) => {
-              if (msg.messageId === lastMsg.messageId) {
-                return { ...msg, suggestions: suggestions };
-              }
-              return msg;
-            }),
-          );
+          try {
+            console.log('🤖 Loading suggestions for message:', lastMsg.messageId);
+            const suggestions = await getSuggestions(messagesRef.current);
+            console.log('✨ Suggestions loaded:', suggestions);
+            setMessages((prev) =>
+              prev.map((msg) => {
+                if (msg.messageId === lastMsg.messageId) {
+                  return { ...msg, suggestions: suggestions };
+                }
+                return msg;
+              }),
+            );
+          } catch (error) {
+            console.error('❌ Failed to load suggestions:', error);
+          }
         }
       }
     };
@@ -472,6 +496,7 @@ const ChatWindow = ({ id }: { id?: string }) => {
         focusMode: focusMode,
         optimizationMode: optimizationMode,
         history: chatHistory,
+        matterId: selectedMatterId,
         chatModel: {
           name: chatModelProvider.name,
           provider: chatModelProvider.provider,
@@ -583,6 +608,8 @@ const ChatWindow = ({ id }: { id?: string }) => {
             setFileIds={setFileIds}
             files={files}
             setFiles={setFiles}
+            selectedMatterId={selectedMatterId}
+            setSelectedMatterId={setSelectedMatterId}
           />
         )}
       </div>

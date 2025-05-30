@@ -1,0 +1,357 @@
+import prompts from '@/lib/prompts';
+import MetaSearchAgent from '@/lib/search/metaSearchAgent';
+import { legalSearchAgent } from '@/lib/chains/legalSearchAgent';
+import crypto from 'crypto';
+import { AIMessage, BaseMessage, HumanMessage } from '@langchain/core/messages';
+import { EventEmitter } from 'stream';
+import {
+  chatModelProviders,
+  embeddingModelProviders,
+  getAvailableChatModelProviders,
+  getAvailableEmbeddingModelProviders,
+} from '@/lib/providers';
+import db from '@/lib/db';
+import { chats, messages as messagesSchema } from '@/lib/db/schema';
+import { and, eq, gt } from 'drizzle-orm';
+import { getFileDetails } from '@/lib/utils/files';
+import { BaseChatModel } from '@langchain/core/language_models/chat_models';
+import { ChatOpenAI } from '@langchain/openai';
+import {
+  getCustomOpenaiApiKey,
+  getCustomOpenaiApiUrl,
+  getCustomOpenaiModelName,
+} from '@/lib/config';
+import { searchHandlers } from '@/lib/search';
+import { supabaseAdmin } from '@/lib/supabase/client';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
+type Message = {
+  messageId: string;
+  chatId: string;
+  content: string;
+};
+
+type ChatModel = {
+  provider: string;
+  name: string;
+};
+
+type EmbeddingModel = {
+  provider: string;
+  name: string;
+};
+
+type Body = {
+  message: Message;
+  optimizationMode: 'speed' | 'balanced' | 'quality';
+  focusMode: string;
+  history: Array<[string, string]>;
+  files: Array<string>;
+  chatModel: ChatModel;
+  embeddingModel: EmbeddingModel;
+  systemInstructions: string;
+  matterId?: string; // New field for legal matter context
+};
+
+// Legal focus modes that should use pure legal search (CourtListener, etc.)
+const PURE_LEGAL_MODES = [
+  'caselaw',
+  'statutory', 
+  'briefWriting',
+  'discovery',
+  'contractAnalysis',
+  'matterDocuments'
+];
+
+// Hybrid modes that combine web search with legal expertise
+const HYBRID_LEGAL_MODES = [
+  'webSearch',
+  'academicSearch',
+  'redditSearch'
+];
+
+const handleEmitterEvents = async (
+  stream: EventEmitter,
+  writer: WritableStreamDefaultWriter,
+  encoder: TextEncoder,
+  aiMessageId: string,
+  chatId: string,
+  matterId?: string,
+) => {
+  let receivedMessage = '';
+  let sources: any[] = [];
+
+  stream.on('data', (data) => {
+    const parsedData = JSON.parse(data);
+    if (parsedData.type === 'response') {
+      writer.write(
+        encoder.encode(
+          JSON.stringify({
+            type: 'message',
+            data: parsedData.data,
+            messageId: aiMessageId,
+          }) + '\n',
+        ),
+      );
+
+      receivedMessage += parsedData.data;
+    } else if (parsedData.type === 'sources') {
+      writer.write(
+        encoder.encode(
+          JSON.stringify({
+            type: 'sources',
+            data: parsedData.data,
+            messageId: aiMessageId,
+          }) + '\n',
+        ),
+      );
+
+      sources = parsedData.data;
+    }
+  });
+
+  stream.on('end', async () => {
+    writer.write(
+      encoder.encode(
+        JSON.stringify({
+          type: 'messageEnd',
+          messageId: aiMessageId,
+        }) + '\n',
+      ),
+    );
+
+    // Store message in both SQLite (for compatibility) and Supabase
+    try {
+      // Store in SQLite
+      await db.insert(messagesSchema).values({
+        chatId: chatId,
+        messageId: aiMessageId,
+        role: 'assistant',
+        content: receivedMessage,
+        metadata: JSON.stringify({
+          createdAt: new Date(),
+          ...(sources.length > 0 && { sources }),
+        }),
+      });
+
+      // Store in Supabase for legal context
+      if (matterId) {
+        await supabaseAdmin.from('legal_messages').insert({
+          chat_id: chatId,
+          message_id: aiMessageId,
+          role: 'assistant',
+          content: receivedMessage,
+          sources: sources.length > 0 ? sources : null,
+        });
+      }
+    } catch (error) {
+      console.error('Error storing message:', error);
+    }
+
+    writer.close();
+  });
+
+  stream.on('error', (error) => {
+    console.error('Stream error:', error);
+    writer.close();
+  });
+};
+
+export async function POST(req: Request) {
+  try {
+    const body: Body = await req.json();
+    const {
+      message,
+      optimizationMode,
+      focusMode,
+      history,
+      files,
+      chatModel,
+      embeddingModel,
+      systemInstructions,
+      matterId,
+    } = body;
+
+    // Generate unique ID for AI response
+    const aiMessageId = crypto.randomBytes(7).toString('hex');
+
+    // Check if the chat exists, if not create it in both databases
+    let chatExists = false;
+    try {
+      const existingChatSQLite = await db
+        .select()
+        .from(chats)
+        .where(eq(chats.id, message.chatId))
+        .limit(1);
+
+      chatExists = existingChatSQLite.length > 0;
+    } catch (error) {
+      console.error('Error checking chat existence:', error);
+    }
+
+    if (!chatExists) {
+      // Create in SQLite for compatibility
+      await db.insert(chats).values({
+        id: message.chatId,
+        title: 'New Legal Research Session',
+        createdAt: new Date().toISOString(),
+        focusMode: focusMode,
+        files: files.map(fileId => ({ name: '', fileId })),
+      });
+
+      // Create in Supabase for legal context
+      if (matterId) {
+        await supabaseAdmin.from('legal_chats').insert({
+          id: message.chatId,
+          matter_id: matterId,
+          title: 'New Legal Research Session',
+          focus_mode: focusMode,
+          context_documents: files,
+        });
+      }
+    }
+
+    // Store user message in both databases
+    await db.insert(messagesSchema).values({
+      chatId: message.chatId,
+      messageId: message.messageId,
+      role: 'user',
+      content: message.content,
+      metadata: JSON.stringify({
+        createdAt: new Date(),
+        focusMode,
+        matterId,
+      }),
+    });
+
+    if (matterId) {
+      await supabaseAdmin.from('legal_messages').insert({
+        chat_id: message.chatId,
+        message_id: message.messageId,
+        role: 'user',
+        content: message.content,
+      });
+    }
+
+    // Set up streaming response
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+
+        try {
+          // Get chat and embedding models
+          const chatModelProviderMap = await getAvailableChatModelProviders();
+          const embeddingModelProviderMap = await getAvailableEmbeddingModelProviders();
+
+          const chatModelProvider = chatModelProviderMap[chatModel.provider]?.[chatModel.name];
+          const embeddingModelProvider = embeddingModelProviderMap[embeddingModel.provider]?.[embeddingModel.name];
+
+          if (!chatModelProvider) {
+            throw new Error(`Chat model ${chatModel.provider}:${chatModel.name} not found`);
+          }
+
+          if (!embeddingModelProvider) {
+            throw new Error(`Embedding model ${embeddingModel.provider}:${embeddingModel.name} not found`);
+          }
+
+          // Convert history to BaseMessage format
+          const formattedHistory: BaseMessage[] = history.map(([role, content]) =>
+            role === 'user' ? new HumanMessage(content) : new AIMessage(content)
+          );
+
+          // Create event emitter for handling responses
+          const eventEmitter = new EventEmitter();
+
+          // Handle the emitter events in background
+          handleEmitterEvents(eventEmitter, writer, encoder, aiMessageId, message.chatId, matterId);
+
+          // Choose search method based on focus mode
+          if (PURE_LEGAL_MODES.includes(focusMode)) {
+            // Use pure legal search agent for legal-specific modes
+            await legalSearchAgent(
+              message.content,
+              formattedHistory,
+              chatModelProvider.model,
+              embeddingModelProvider.model,
+              matterId,
+              (data) => {
+                eventEmitter.emit('data', JSON.stringify(data));
+              }
+            );
+          } else if (HYBRID_LEGAL_MODES.includes(focusMode)) {
+            // Use original Perplexica search handlers with legal context enhancement
+            const searchHandler = searchHandlers[focusMode] || searchHandlers['webSearch'];
+            
+            // Enhance the query with legal context if matter is selected
+            let enhancedContent = message.content;
+            if (matterId) {
+              // Add matter context to the search query
+              const { data: matter } = await supabaseAdmin
+                .from('matters')
+                .select('name, client_name, practice_area')
+                .eq('id', matterId)
+                .single();
+                
+              if (matter) {
+                enhancedContent = `Legal context: Matter "${matter.name}"${matter.client_name ? ` for client ${matter.client_name}` : ''}${matter.practice_area ? ` (${matter.practice_area})` : ''}. Query: ${message.content}`;
+              }
+            }
+            
+            await searchHandler(
+              enhancedContent,
+              formattedHistory,
+              chatModelProvider.model,
+              embeddingModelProvider.model,
+              optimizationMode,
+              (data) => {
+                eventEmitter.emit('data', JSON.stringify(data));
+              },
+              files
+            );
+          } else {
+            // Use original Perplexica search handlers for standard modes
+            const searchHandler = searchHandlers[focusMode] || searchHandlers['webSearch'];
+            
+            await searchHandler(
+              message.content,
+              formattedHistory,
+              chatModelProvider.model,
+              embeddingModelProvider.model,
+              optimizationMode,
+              (data) => {
+                eventEmitter.emit('data', JSON.stringify(data));
+              },
+              files
+            );
+          }
+
+          eventEmitter.emit('end');
+        } catch (error) {
+          console.error('Error in chat processing:', error);
+          writer.write(
+            encoder.encode(
+              JSON.stringify({
+                type: 'error',
+                data: 'An error occurred while processing your request.',
+                messageId: aiMessageId,
+              }) + '\n',
+            ),
+          );
+          writer.close();
+        }
+      },
+    });
+
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Transfer-Encoding': 'chunked',
+      },
+    });
+  } catch (error) {
+    console.error('Error in chat API:', error);
+    return new Response('Internal Server Error', { status: 500 });
+  }
+}
