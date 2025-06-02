@@ -255,7 +255,7 @@ Response:`,
         const highlightText = documentContext.substring(startPos, endPosition);
         
         // Generate enhanced highlight with PDF coordinate support
-        const highlight = {
+        const highlight: any = {
           id: `highlight_${highlights.length}`,
           startPos: startPos,
           endPos: endPosition,

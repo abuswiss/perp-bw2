@@ -1,10 +1,10 @@
 import { BaseAgent } from './BaseAgent';
-import { AgentInput, AgentOutput, AgentCapability, Citation, AgentContext } from './types';
+import { AgentInput, AgentOutput, AgentCapability, Citation } from './types';
 import { DeepLegalResearchAgentInputSchema, DeepLegalResearchAgentOutputSchema } from './schemas'; // Assuming these will be created
 import { Document } from '@langchain/core/documents';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { getDefaultChatModel } from '@/lib/providers'; // Or your specific LLM provider
-import { searchSearxng } from '@/lib/searxng';
+import { performWebSearch } from '@/lib/search/providers';
 import { CourtListenerAPI } from '@/lib/integrations/courtlistener';
 // Import prompts and other necessary utilities from academicSearch and ResearchAgent as needed
 // For example:
@@ -141,7 +141,7 @@ export class DeepLegalResearchAgent extends BaseAgent {
     }
   }
 
-  private async planResearchStrategy(query: string, parameters?: Record<string, any>, agentContext?: AgentContext): Promise<any> {
+  private async planResearchStrategy(query: string, parameters?: Record<string, any>, context?: Record<string, any>): Promise<any> {
     console.log('Planning research strategy for:', query, 'with params:', parameters);
     if (!this.llm) {
       console.warn('LLM not available for research planning. Using basic plan.');
@@ -472,7 +472,7 @@ JSON Research Plan:
     console.log(`Executing academic search with query: "${academicQuery}"`);
 
     try {
-      const searchResults = await searchSearxng(academicQuery, {
+      const searchResults = await performWebSearch(academicQuery, {
         engines: ['google scholar', 'google'], // Prioritize Google Scholar
         // Potentially add other academic-focused SearXNG engines if configured
       });
@@ -491,7 +491,6 @@ JSON Research Plan:
                 source: 'Academic Web Search',
                 title: result.title || 'Untitled Academic Source',
                 url: result.url,
-                engine: result.engine,
                 snippet: result.content?.substring(0, 300),
                 // Consider adding authors, publication date if extractable from snippet or title
               }
@@ -553,9 +552,7 @@ Rephrased legal academic question:
     const lowerContent = (content || "").substring(0, 500).toLowerCase(); // Check beginning of content
 
     if (lowerUrl.endsWith('.pdf')) return true;
-    if (keywords.some(kw => lowerTitle.includes(kw) || lowerContent.includes(kw))) {
-        return true;
-    }
+    
     const academicSitePatterns = ['scholar.google', 'jstor.org', 'ssrn.com', 'academia.edu', 'researchgate.net', 'heinonline.org', '.law.edu', '.edu/research'];
     if (academicSitePatterns.some(pattern => lowerUrl.includes(pattern))) return true;
 
@@ -579,7 +576,7 @@ Rephrased legal academic question:
     console.log(`Executing vetted web search with query: "${finalWebQuery}"`);
 
     try {
-        const searchResults = await searchSearxng(finalWebQuery, {
+        const searchResults = await performWebSearch(finalWebQuery, {
             engines: ['google', 'bing', 'duckduckgo'], // General engines
             // Potentially add filters for .gov, .edu if desired, though isPotentiallyGoodLegalWebSource handles some of this
         });
@@ -596,7 +593,6 @@ Rephrased legal academic question:
                             source: 'Web Search',
                             title: result.title || 'Untitled Web Source',
                             url: result.url,
-                            engine: result.engine,
                             snippet: result.content?.substring(0, 300),
                         }
                     }));
@@ -743,14 +739,14 @@ Rephrased legal academic question:
     return legalDomains.some(domain => url.includes(domain));
   }
 
-  private async synthesizeFindings(query: string, sources: Document[], researchPlan: any, agentContext?: AgentContext): Promise<{ synthesizedText: string; keyFindings?: string[]; summary?: string; researchPathways?: string[] }> {
+  private async synthesizeFindings(query: string, sources: Document[], researchPlan: any, context?: Record<string, any>): Promise<{ synthesizedText: string; keyFindings?: string[]; summary?: string; researchPathways?: string[] }> {
     console.log(`Synthesizing findings from ${sources.length} sources for query: "${query}"`);
     if (!this.llm) {
       const basicResponse = this.generateBasicNonLLMSynthesis(query, sources);
       return { synthesizedText: basicResponse, keyFindings: [], summary: basicResponse.substring(0, 300) + "..." };
     }
 
-    const relevantMatterDocumentsContext = await this.getMatterDocumentContextString(agentContext?.matter_info?.id, agentContext?.fileIds);
+    const relevantMatterDocumentsContext = await this.getMatterDocumentContextString(context?.matter_info?.id, context?.fileIds);
 
     const sourcesString = sources.map((doc, index) => {
       const metadata = doc.metadata || {};

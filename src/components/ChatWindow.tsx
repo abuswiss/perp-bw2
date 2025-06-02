@@ -13,6 +13,7 @@ import { Settings } from 'lucide-react';
 import Link from 'next/link';
 import NextError from 'next/error';
 import { useMatter } from '@/contexts/MatterContext';
+import { useDocumentAnalysis } from '@/contexts/DocumentAnalysisContext';
 // Document analysis imports removed - now using simple text response
 
 export type Message = {
@@ -241,6 +242,7 @@ const loadMessages = async (
 const ChatWindow = ({ id }: { id?: string }) => {
   const searchParams = useSearchParams();
   const initialMessage = searchParams.get('q');
+  const { setDocumentAnalysis } = useDocumentAnalysis();
 
   const [chatId, setChatId] = useState<string | undefined>(id);
   const [newChatCreated, setNewChatCreated] = useState(false);
@@ -794,7 +796,7 @@ const ChatWindow = ({ id }: { id?: string }) => {
             focusMode={focusMode}
             setFocusMode={setFocusMode}
             optimizationMode={optimizationMode}
-            setOptimizationMode={setOptimizationMode}
+            setOptimizationMode={(mode: string) => setOptimizationMode(mode as 'speed' | 'balanced' | 'quality')}
             fileIds={fileIds}
             setFileIds={setFileIds}
             files={files}

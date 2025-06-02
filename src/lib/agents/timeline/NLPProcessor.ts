@@ -386,9 +386,7 @@ Return ONLY a valid JSON object:
     const entities: LegalEntities = {
       parties: [{ role: 'plaintiff', type: 'individual' }],
       jurisdiction: {
-        federal: lowerInput.includes('federal'),
-        state: null,
-        county: null
+        federal: lowerInput.includes('federal')
       },
       damages: {
         economic: null,

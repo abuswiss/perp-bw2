@@ -8,7 +8,8 @@ import {
   Deadline,
   NextSteps,
   Action,
-  Risk
+  Risk,
+  ExecutiveSummary
 } from './types';
 import { v4 as uuidv4 } from 'uuid';
 

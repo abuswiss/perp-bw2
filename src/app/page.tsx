@@ -10,7 +10,7 @@ const HomeContent = () => {
   
   return (
     <DocumentAnalysisWrapper
-      documentId={documentId}
+      documentId={documentId ?? undefined}
       highlights={highlights}
       className="h-screen"
     >

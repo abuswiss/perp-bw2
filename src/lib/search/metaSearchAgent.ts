@@ -18,6 +18,7 @@ import LineOutputParser from '../outputParsers/lineOutputParser';
 import { getDocumentsFromLinks } from '../utils/documents';
 import { Document } from 'langchain/document';
 import { searchSearxng } from '../searxng';
+import { performWebSearch } from './providers';
 import path from 'node:path';
 import fs from 'node:fs';
 import computeSimilarity from '../utils/computeSimilarity';
@@ -104,9 +105,9 @@ class MetaSearchAgent implements MetaSearchAgentType {
           console.log('[MetaSearchAgent] Individual queries (isMultiQuery=true):', individualQueries);
 
           for (const singleQuery of individualQueries) {
-            console.log(`[MetaSearchAgent] Executing searchSearxng for individual query: "${singleQuery}"`);
+            console.log(`[MetaSearchAgent] Executing web search for individual query: "${singleQuery}"`);
             try {
-              const res = await searchSearxng(singleQuery, {
+              const res = await performWebSearch(singleQuery, {
                 language: 'en',
                 engines: this.config.activeEngines,
               });
@@ -169,8 +170,8 @@ class MetaSearchAgent implements MetaSearchAgentType {
                 return { query: llmOutputString, docs: [] };
             }
 
-            console.log(`[MetaSearchAgent] Executing searchSearxng with single query (isMultiQuery=false): "${finalQuery}"`);
-            const res = await searchSearxng(finalQuery, {
+            console.log(`[MetaSearchAgent] Executing web search with single query (isMultiQuery=false): "${finalQuery}"`);
+            const res = await performWebSearch(finalQuery, {
               language: 'en',
               engines: this.config.activeEngines,
             });

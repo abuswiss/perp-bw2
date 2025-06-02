@@ -1,7 +1,7 @@
 import { BaseAgent } from './BaseAgent';
 import { AgentInput, AgentOutput, AgentCapability, Citation } from './types';
 import { CourtListenerAPI } from '@/lib/integrations/courtlistener';
-import { searchSearxng } from '@/lib/searxng';
+import { performWebSearch } from '@/lib/search/providers';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { PromptTemplate } from '@langchain/core/prompts';
 import { StringOutputParser } from '@langchain/core/output_parsers';
@@ -172,7 +172,7 @@ export class ResearchAgent extends BaseAgent {
     // Search web for legal sources
     try {
       console.log('🌐 Starting web search for:', query);
-      const webResults = await searchSearxng(query + ' law legal statute case', {
+      const webResults = await performWebSearch(query + ' law legal statute case', {
         categories: ['general'],
         engines: ['google', 'bing']
       });
