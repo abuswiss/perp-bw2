@@ -7,6 +7,8 @@ export const PROVIDER_INFO = {
 
 export const loadTransformersEmbeddingsModels = async () => {
   try {
+    // Don't initialize models here - just return metadata
+    // Models will be instantiated lazily when actually used
     const embeddingModels = {
       'xenova-bge-small-en-v1.5': {
         displayName: 'BGE Small',

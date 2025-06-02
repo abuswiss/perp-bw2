@@ -1,19 +1,31 @@
+'use client';
+
 import ChatWindow from '@/components/ChatWindow';
-import { Metadata } from 'next';
+import DocumentAnalysisWrapper from '@/components/DocumentAnalysisWrapper';
+import { DocumentAnalysisProvider, useDocumentAnalysis } from '@/contexts/DocumentAnalysisContext';
 import { Suspense } from 'react';
 
-export const metadata: Metadata = {
-  title: 'Legal Research - BenchWise',
-  description: 'AI-powered legal research and analysis platform for legal professionals.',
+const HomeContent = () => {
+  const { documentId, highlights } = useDocumentAnalysis();
+  
+  return (
+    <DocumentAnalysisWrapper
+      documentId={documentId}
+      highlights={highlights}
+      className="h-screen"
+    >
+      <ChatWindow />
+    </DocumentAnalysisWrapper>
+  );
 };
 
 const Home = () => {
   return (
-    <div>
+    <DocumentAnalysisProvider>
       <Suspense>
-        <ChatWindow />
+        <HomeContent />
       </Suspense>
-    </div>
+    </DocumentAnalysisProvider>
   );
 };
 

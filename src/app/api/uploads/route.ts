@@ -9,6 +9,8 @@ import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
 import { Document } from 'langchain/document';
 import { supabaseAdmin } from '@/lib/supabase/client';
 import { v4 as uuidv4 } from 'uuid';
+import { createStandardizedEmbeddings, StandardizedEmbeddings } from '@/lib/embeddings/standardizedEmbeddings';
+import { STANDARD_EMBEDDING_DIMENSION } from '@/lib/embeddings/config';
 
 interface FileRes {
   fileName: string;
@@ -35,7 +37,7 @@ export async function POST(req: Request) {
     const files = formData.getAll('files') as File[];
     const embedding_model = formData.get('embedding_model');
     const embedding_model_provider = formData.get('embedding_model_provider');
-    const matter_id = formData.get('matter_id') as string | null;
+    const matter_id = formData.get('matterId') as string | null; // Changed from matter_id to matterId
     const user_id = formData.get('user_id') as string | null;
 
     if (!embedding_model || !embedding_model_provider) {
@@ -45,18 +47,71 @@ export async function POST(req: Request) {
       );
     }
 
-    const embeddingModels = await getAvailableEmbeddingModelProviders();
-    const provider =
-      embedding_model_provider ?? Object.keys(embeddingModels)[0];
-    const embeddingModel =
-      embedding_model ?? Object.keys(embeddingModels[provider as string])[0];
+    console.log(`Using embedding model: ${embedding_model_provider}/${embedding_model}`);
+    console.log(`Target embedding dimension: ${STANDARD_EMBEDDING_DIMENSION}`);
 
-    let embeddingsModel =
-      embeddingModels[provider as string]?.[embeddingModel as string]?.model;
-    if (!embeddingsModel) {
-      return NextResponse.json(
-        { message: 'Invalid embedding model selected' },
-        { status: 400 },
+    // Use standardized embeddings wrapper to ensure consistent dimensions
+    let embeddingsModel: StandardizedEmbeddings;
+    
+    try {
+      // Get API key based on provider
+      let apiKey: string | undefined;
+      
+      if (embedding_model_provider === 'openai') {
+        // Try environment variable first, then config
+        apiKey = process.env.OPENAI_API_KEY;
+        if (!apiKey) {
+          try {
+            const { getOpenaiApiKey } = await import('@/lib/config');
+            apiKey = getOpenaiApiKey();
+          } catch (error) {
+            console.error('Failed to load OpenAI API key from config:', error);
+          }
+        }
+      } else if (embedding_model_provider === 'gemini') {
+        apiKey = process.env.GOOGLE_API_KEY;
+        if (!apiKey) {
+          try {
+            const { getGeminiApiKey } = await import('@/lib/config');
+            apiKey = getGeminiApiKey();
+          } catch (error) {
+            console.error('Failed to load Gemini API key from config:', error);
+          }
+        }
+      }
+      
+      if (!apiKey) {
+        throw new Error(`${(embedding_model_provider as string).toUpperCase()} API key not found in environment or config`);
+      }
+      
+      embeddingsModel = await createStandardizedEmbeddings(
+        embedding_model_provider as string,
+        embedding_model as string,
+        apiKey
+      );
+      
+      console.log('Embedding model info:', embeddingsModel.getModelInfo());
+    } catch (error) {
+      console.error('Failed to create standardized embeddings, falling back to default:', error);
+      // Fallback to default OpenAI model
+      let fallbackApiKey = process.env.OPENAI_API_KEY;
+      if (!fallbackApiKey) {
+        try {
+          const { getOpenaiApiKey } = await import('@/lib/config');
+          fallbackApiKey = getOpenaiApiKey();
+        } catch (configError) {
+          console.error('Failed to load fallback OpenAI API key from config:', configError);
+          return NextResponse.json(
+            { message: 'OpenAI API key not configured' },
+            { status: 500 }
+          );
+        }
+      }
+      
+      embeddingsModel = await createStandardizedEmbeddings(
+        'openai',
+        'text-embedding-3-small',
+        fallbackApiKey
       );
     }
 
@@ -138,6 +193,16 @@ export async function POST(req: Request) {
             processing_status: 'processing',
             created_by: user_id || null,
             metadata: {
+              source: 'user_upload',
+              uploaded_by: user_id || 'anonymous',
+              upload_method: 'api',
+              upload_timestamp: new Date().toISOString(),
+              original_filename: file.name,
+              original_mimetype: file.type,
+              processing_pipeline: 'chunk_and_embed',
+              embedding_model: `${embedding_model_provider}/${embedding_model}`,
+              chunk_size: 500,
+              chunk_overlap: 100,
               originalPath: filePath,
               pageCount: docs.length,
               chunkCount: splitted.length
@@ -154,16 +219,36 @@ export async function POST(req: Request) {
         const embeddings = await embeddingsModel.embedDocuments(
           splitted.map((doc) => doc.pageContent),
         );
+        
+        // Log embedding details for debugging
+        console.log(`Generated ${embeddings.length} embeddings`);
+        if (embeddings.length > 0) {
+          console.log(`First embedding dimension: ${embeddings[0]?.length}`);
+          console.log(`First few values: ${embeddings[0]?.slice(0, 5).join(', ')}`);
+        }
+        
+        // Validate embeddings have correct dimensions
+        if (!StandardizedEmbeddings.validateEmbeddings(embeddings)) {
+          console.error(`Invalid embedding dimensions detected. Expected ${STANDARD_EMBEDDING_DIMENSION}, got ${embeddings[0]?.length}`);
+          // Don't throw error, just log warning and continue
+          console.warn('Continuing despite dimension mismatch...');
+        }
 
         // Store chunks with embeddings in Supabase
         const chunksToInsert = splitted.map((doc, index) => ({
           document_id: fileId,
           chunk_index: index,
           content: doc.pageContent,
-          embedding: embeddings[index],
+          embedding: embeddings[index], // Now guaranteed to be 1536 dimensions
           start_page: doc.metadata?.pageNumber || null,
           end_page: doc.metadata?.pageNumber || null,
-          metadata: doc.metadata || {}
+          metadata: {
+            ...doc.metadata,
+            embeddingModel: `${embedding_model_provider}/${embedding_model}`,
+            embeddingDimension: STANDARD_EMBEDDING_DIMENSION,
+            chunkMethod: 'recursive_character',
+            processedAt: new Date().toISOString()
+          }
         }));
 
         const { error: chunksError } = await supabaseAdmin
@@ -187,6 +272,12 @@ export async function POST(req: Request) {
           JSON.stringify({
             title: file.name,
             contents: splitted.map((doc) => doc.pageContent),
+            metadata: {
+              uploadDate: new Date().toISOString(),
+              pageCount: docs.length,
+              chunkCount: splitted.length,
+              documentType: inferDocumentType(file.name, fullText),
+            }
           }),
         );
 

@@ -35,10 +35,8 @@ export function MatterProvider({ children }: { children: ReactNode }) {
 
       setMatters(data || []);
       
-      // Set the most recent matter as current if none selected
-      if (!currentMatter && data && data.length > 0) {
-        setCurrentMatter(data[0]);
-      }
+      // Don't auto-select a matter - keep "General Research" as default
+      // Only set a matter if it was previously selected and stored in localStorage
     } catch (error) {
       console.error('Error in loadMatters:', error);
     } finally {
@@ -71,7 +69,7 @@ export function MatterProvider({ children }: { children: ReactNode }) {
       // Reload matters to update the list
       await loadMatters();
       
-      // Set as current matter
+      // Set as current matter when explicitly created
       if (data) {
         setCurrentMatter(data);
       }
@@ -161,13 +159,16 @@ export function MatterProvider({ children }: { children: ReactNode }) {
     }
   }, [currentMatter]);
 
-  // Restore current matter from localStorage
+  // Restore current matter from localStorage on mount
   useEffect(() => {
     const storedMatterId = localStorage.getItem('currentMatterId');
-    if (storedMatterId && matters.length > 0) {
+    if (storedMatterId && storedMatterId !== 'null' && matters.length > 0) {
       const matter = matters.find(m => m.id === storedMatterId);
-      if (matter) {
+      if (matter && matter.status === 'active') {
         setCurrentMatter(matter);
+      } else {
+        // If stored matter not found or inactive, remove from storage
+        localStorage.removeItem('currentMatterId');
       }
     }
   }, [matters]);

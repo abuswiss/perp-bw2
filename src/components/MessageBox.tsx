@@ -1,7 +1,7 @@
 'use client';
 
 /* eslint-disable @next/next/no-img-element */
-import React, { MutableRefObject, useEffect, useState } from 'react';
+import React, { MutableRefObject, useEffect, useState, useRef } from 'react';
 import { Message } from './ChatWindow';
 import { cn } from '@/lib/utils';
 import {
@@ -21,6 +21,10 @@ import { useSpeech } from 'react-text-to-speech';
 import ThinkBox from './ThinkBox';
 import TaskProgress from './agents/TaskProgress';
 import DocumentActions from './DocumentActions';
+import AgentResultActions from './agents/AgentResultActions';
+import ResearchExporter from './search/ResearchExporter';
+import { useDocumentAnalysis } from '@/contexts/DocumentAnalysisContext';
+import { useMatter } from '@/contexts/MatterContext';
 
 const ThinkTagProcessor = ({ children }: { children: React.ReactNode }) => {
   return <ThinkBox content={children as string} />;
@@ -45,16 +49,19 @@ const MessageBox = ({
   rewrite: (messageId: string) => void;
   sendMessage: (message: string) => void;
 }) => {
+  const { currentMatter } = useMatter();
+  // Document analysis context removed - using simple text response
   const [parsedMessage, setParsedMessage] = useState(message.content);
   const [speechMessage, setSpeechMessage] = useState(message.content);
   
-
   useEffect(() => {
     const citationRegex = /\[([^\]]+)\]/g;
     const regex = /\[(\d+)\]/g;
-    let processedMessage = message.content;
+    let processedMessage = message.content || '';
 
-    if (message.role === 'assistant' && message.content.includes('<think>')) {
+    // Document analysis now just returns plain text - no special processing needed
+
+    if (message.role === 'assistant' && processedMessage.includes('<think>')) {
       const openThinkTag = processedMessage.match(/<think>/g)?.length || 0;
       const closeThinkTag = processedMessage.match(/<\/think>/g)?.length || 0;
 
@@ -85,7 +92,7 @@ const MessageBox = ({
                 }
 
                 const source = message.sources?.[number - 1];
-                const url = source?.metadata?.url;
+                const url = source?.metadata?.url || (source as any)?.url;
 
                 if (url) {
                   return `<a href="${url}" target="_blank" className="bg-light-secondary dark:bg-dark-secondary px-1 rounded ml-1 no-underline text-xs text-black/70 dark:text-white/70 relative">${numStr}</a>`;
@@ -99,13 +106,14 @@ const MessageBox = ({
           },
         ),
       );
-      setSpeechMessage(message.content.replace(regex, ''));
+      setSpeechMessage(processedMessage.replace(regex, ''));
       return;
     }
 
-    setSpeechMessage(message.content.replace(regex, ''));
+    setSpeechMessage(processedMessage.replace(regex, ''));
     setParsedMessage(processedMessage);
-  }, [message.content, message.sources, message.role]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [message.content, message.sources, message.role, message.focusMode]);
 
   const { speechStatus, start, stop } = useSpeech({ text: speechMessage });
 
@@ -183,18 +191,85 @@ const MessageBox = ({
                 </div>
               )}
 
-              <Markdown
-                className={cn(
-                  'prose prose-h1:mb-3 prose-h2:mb-2 prose-h2:mt-6 prose-h2:font-[800] prose-h3:mt-4 prose-h3:mb-1.5 prose-h3:font-[600] dark:prose-invert prose-p:leading-relaxed prose-pre:p-0 font-[400]',
-                  'max-w-none break-words text-black dark:text-white',
-                )}
-                options={markdownOverrides}
-              >
-                {parsedMessage}
-              </Markdown>
+              {parsedMessage ? (
+                <Markdown
+                  className={cn(
+                    'prose prose-h1:mb-3 prose-h2:mb-2 prose-h2:mt-6 prose-h2:font-[800] prose-h3:mt-4 prose-h3:mb-1.5 prose-h3:font-[600] dark:prose-invert prose-p:leading-relaxed prose-pre:p-0 font-[400]',
+                    'max-w-none break-words text-black dark:text-white',
+                  )}
+                  options={markdownOverrides}
+                >
+                  {parsedMessage}
+                </Markdown>
+              ) : (
+                // If parsedMessage is empty
+                isLast && loading && !message.progressMessage ? (
+                  <div className="text-black/70 dark:text-white/70 text-sm">
+                    Analyzing...
+                  </div>
+                ) : message.focusMode === 'documentAnalysis' && message.role === 'assistant' ? (
+                  <div className="text-black/70 dark:text-white/70 text-sm italic">
+                    Document analysis complete. The document viewer has been updated.
+                  </div>
+                ) : (
+                  // Generic case for empty message for assistant. Users messages are handled above.
+                  message.role === 'assistant' && <div className="text-black/70 dark:text-white/70 text-sm">
+                    {/* No textual response. */}
+                  </div>
+                )
+              )}
               
-              {/* Show document actions for brief writing */}
-              {!loading && message.role === 'assistant' && message.focusMode === 'briefWriting' && message.content && (
+              {/* Document analysis banner removed - now just shows analysis text */}
+              
+              {/* Show agent result actions for legal modes (but not when ResearchExporter will handle it or DocumentAnalysisLayout) */}
+              {!loading && message.role === 'assistant' && 
+               ['legalResearch', 'briefWriting', 'discovery', 'contractAnalysis', 'legalTimeline', 'documentAnalysis', 'deepLegalResearch'].includes(message.focusMode || '') && 
+               message.content && 
+               !(
+                 ['legalResearch', 'briefWriting', 'deepLegalResearch'].includes(message.focusMode || '') && 
+                 message.sources && message.sources.length > 0
+               ) &&
+               !(message.focusMode === 'documentAnalysis' && message.content.includes('||INTERACTIVE_DOCUMENT_ANALYSIS||')) && (
+                <AgentResultActions 
+                  content={message.content}
+                  agentType={message.focusMode === 'legalResearch' ? 'research' : 
+                           message.focusMode === 'briefWriting' ? 'brief-writing' :
+                           message.focusMode === 'discovery' ? 'discovery' : 
+                           message.focusMode === 'legalTimeline' ? 'timeline' : 
+                           message.focusMode === 'documentAnalysis' ? 'document-analysis' :
+                           message.focusMode === 'deepLegalResearch' ? 'deepLegalResearch' : 'contract'}
+                  taskId={message.taskId}
+                  autoSave={true}
+                />
+              )}
+
+              {/* Research Exporter for legal research with sources */}
+              {!loading && message.role === 'assistant' && 
+               ['legalResearch', 'briefWriting', 'deepLegalResearch'].includes(message.focusMode || '') && 
+               message.sources && message.sources.length > 0 && (
+                <div className="mt-4">
+                  <ResearchExporter 
+                    researchData={{
+                      query: history[messageIndex - 1]?.content || '',
+                      summary: message.content,
+                      sources: message.sources,
+                      cases: message.sources.filter((s: any) => s.metadata?.case_name || s.case_name || s.metadata?.citation || s.citation),
+                      statutes: message.sources.filter((s: any) => {
+                        const title = s.metadata?.title || s.title || '';
+                        return title.includes('USC') || title.includes('Code') || title.includes('U.S.C');
+                      }),
+                      citations: message.sources,
+                      timestamp: new Date().toISOString(),
+                      matterId: currentMatter?.id
+                    }}
+                    title={`Research Report - ${message.focusMode === 'legalResearch' ? 'Legal Research' : 'Brief Writing'}`}
+                  />
+                </div>
+              )}
+
+              {/* Show document actions for non-legal brief writing (fallback) */}
+              {!loading && message.role === 'assistant' && message.focusMode === 'briefWriting' && 
+               message.content && (
                 <DocumentActions 
                   content={message.content}
                   title="Legal Document"
@@ -236,7 +311,14 @@ const MessageBox = ({
               
               {/* Show copilot suggestions after message content - only for non-legal modes */}
               {!loading && isLast && message.role === 'assistant' && message.suggestions && message.suggestions.length > 0 && 
-               message.focusMode !== 'legalResearch' && message.focusMode !== 'briefWriting' && (
+               message.focusMode !== 'legalResearch' && message.focusMode !== 'briefWriting' && 
+               message.focusMode !== 'contractAnalysis' && message.focusMode !== 'discovery' && 
+               message.focusMode !== 'legalTimeline' && message.focusMode !== 'academicSearch' && 
+               message.focusMode !== 'documentAnalysis' && message.focusMode !== 'deepLegalResearch' &&
+               message.focusMode !== 'webSearch' &&
+               message.focusMode !== 'wolframAlphaSearch' &&
+               message.focusMode !== 'redditSearch' &&
+               !message.focusMode?.startsWith('custom-') && (
                 <div className="mt-4 flex flex-wrap gap-2">
                   {message.suggestions.map((suggestion, index) => (
                     <button
@@ -319,8 +401,8 @@ const MessageBox = ({
                 )}
             </div>
           </div>
-          {/* Hide search components for brief writing mode */}
-          {message.focusMode !== 'briefWriting' && (
+          {/* Hide search components for legal modes */}
+          {!['briefWriting', 'legalResearch', 'discovery', 'contractAnalysis', 'documentAnalysis'].includes(message.focusMode || '') && (
             <div className="lg:sticky lg:top-20 flex flex-col items-center space-y-3 w-full lg:w-3/12 z-30 h-full pb-4">
               <SearchImages
                 query={history[messageIndex - 1].content}

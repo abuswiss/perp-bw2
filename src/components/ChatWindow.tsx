@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { Document } from '@langchain/core/documents';
 import Navbar from './Navbar';
 import Chat from './Chat';
@@ -12,6 +12,8 @@ import { getSuggestions } from '@/lib/actions';
 import { Settings } from 'lucide-react';
 import Link from 'next/link';
 import NextError from 'next/error';
+import { useMatter } from '@/contexts/MatterContext';
+// Document analysis imports removed - now using simple text response
 
 export type Message = {
   messageId: string;
@@ -279,13 +281,79 @@ const ChatWindow = ({ id }: { id?: string }) => {
   const [files, setFiles] = useState<File[]>([]);
   const [fileIds, setFileIds] = useState<string[]>([]);
 
-  const [focusMode, setFocusMode] = useState('legalResearch');
-  const [optimizationMode, setOptimizationMode] = useState('speed');
-  const [selectedMatterId, setSelectedMatterId] = useState<string | null>(null);
+  const [focusMode, setFocusMode] = useState<string>('webSearch');
+  const [optimizationMode, setOptimizationMode] = useState<
+    'speed' | 'balanced' | 'quality'
+  >('speed');
+  
+  // Add refs to track streaming state
+  const streamingRef = useRef<{
+    currentMessage: string;
+    messageId: string;
+    added: boolean;
+    sources?: Document[];
+    buffer: string;
+    bufferTimeout?: NodeJS.Timeout;
+    isUpdating: boolean;
+    jsonBuffer: string;
+    inJsonBlock: boolean;
+  }>({
+    currentMessage: '',
+    messageId: '',
+    added: false,
+    sources: undefined,
+    buffer: '',
+    isUpdating: false,
+    jsonBuffer: '',
+    inJsonBlock: false
+  });
+
+  // Buffer-based message update
+  const updateMessageContent = useCallback((messageId: string, content: string) => {
+    // Add to buffer
+    streamingRef.current.buffer = content;
+    
+    // If we're already updating, don't schedule another update
+    if (streamingRef.current.isUpdating) {
+      return;
+    }
+
+    streamingRef.current.isUpdating = true;
+
+    // Schedule update for next frame
+    requestAnimationFrame(() => {
+      setMessages(prev => {
+        const messageIndex = prev.findIndex(m => m.messageId === messageId);
+        if (messageIndex === -1) return prev;
+        
+        const updatedMessages = [...prev];
+        updatedMessages[messageIndex] = {
+          ...updatedMessages[messageIndex],
+          content: streamingRef.current.buffer
+        };
+        return updatedMessages;
+      });
+
+      // Reset update flag after a short delay to allow for new updates
+      setTimeout(() => {
+        streamingRef.current.isUpdating = false;
+      }, 16); // One frame at 60fps
+    });
+  }, []);
+
+  // Use MatterContext instead of local state
+  const { currentMatter, setCurrentMatter } = useMatter();
+  // Document analysis context removed - using simple text response
 
   const [isMessagesLoaded, setIsMessagesLoaded] = useState(false);
 
   const [notFound, setNotFound] = useState(false);
+  const messagesRef = useRef<Message[]>([]);
+  
+  // Update ref when messages change
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   useEffect(() => {
     if (
@@ -312,12 +380,6 @@ const ChatWindow = ({ id }: { id?: string }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const messagesRef = useRef<Message[]>([]);
-
-  useEffect(() => {
-    messagesRef.current = messages;
-  }, [messages]);
-
   useEffect(() => {
     if (isMessagesLoaded && isConfigReady) {
       setIsReady(true);
@@ -337,22 +399,39 @@ const ChatWindow = ({ id }: { id?: string }) => {
     setLoading(true);
     setMessageAppeared(false);
 
-    let sources: Document[] | undefined = undefined;
-    let recievedMessage = '';
-    let added = false;
-
     messageId = messageId ?? crypto.randomBytes(7).toString('hex');
+    
+    // Initialize streaming state
+    streamingRef.current = {
+      currentMessage: '',
+      messageId,
+      added: false,
+      sources: undefined,
+      buffer: '',
+      isUpdating: false,
+      jsonBuffer: '',
+      inJsonBlock: false
+    };
 
-    setMessages((prevMessages) => [
-      ...prevMessages,
+    // Add user message immediately
+    setMessages(prev => [
+      ...prev,
       {
         content: message,
-        messageId: messageId,
+        messageId,
         chatId: chatId!,
         role: 'user',
         createdAt: new Date(),
       },
     ]);
+
+    // If this is document analysis with files, show the document panel immediately
+    // TODO: Temporarily disabled to debug separate window issue
+    // if (focusMode === 'documentAnalysis' && fileIds.length > 0) {
+    //   console.log('🔄 Starting document analysis - opening document panel early');
+    //   // Use the first file ID to open the document panel
+    //   setDocumentAnalysis(fileIds[0], []);
+    // }
 
     const messageHandler = async (data: any) => {
       if (data.type === 'error') {
@@ -362,86 +441,176 @@ const ChatWindow = ({ id }: { id?: string }) => {
       }
 
       if (data.type === 'progress') {
-        // Update loading state with progress message
-        setMessages((prev) =>
-          prev.map((msg) => {
-            if (msg.messageId === data.messageId && msg.role === 'assistant') {
+        setMessages(prev =>
+          prev.map(msg => {
+            if (msg && msg.messageId === data.messageId && msg.role === 'assistant') {
               return { ...msg, progressMessage: data.data };
             }
             return msg;
-          }),
+          })
         );
         return;
       }
 
+      if (data.type === 'documentAnalysis') {
+        // Handle document analysis data separately
+        // This will be sent by the server when it detects document analysis JSON
+        const { documentId, highlights } = data.data;
+        if (documentId) {
+          setDocumentAnalysis(documentId, highlights || []);
+        }
+        return;
+      }
+
       if (data.type === 'sources') {
-        sources = data.data;
-        if (!added) {
-          setMessages((prevMessages) => [
-            ...prevMessages,
+        streamingRef.current.sources = data.data;
+        if (!streamingRef.current.added) {
+          setMessages(prev => [
+            ...prev,
             {
               content: '',
               messageId: data.messageId,
               chatId: chatId!,
               role: 'assistant',
-              sources: sources,
+              sources: data.data,
               createdAt: new Date(),
               focusMode: focusMode,
             },
           ]);
-          added = true;
+          streamingRef.current.added = true;
         }
         setMessageAppeared(true);
       }
 
       if (data.type === 'message') {
-        if (!added) {
-          setMessages((prevMessages) => [
-            ...prevMessages,
+        // Filter out document analysis JSON markers during streaming
+        let filteredContent = data.data;
+        const startMarker = '||DOC_DATA_START||';
+        const endMarker = '||DOC_DATA_END||';
+        
+        // Handle JSON block buffering
+        if (streamingRef.current.inJsonBlock) {
+          // We're inside a JSON block, buffer everything
+          streamingRef.current.jsonBuffer += data.data;
+          
+          // Check if we have the end marker
+          if (streamingRef.current.jsonBuffer.includes(endMarker)) {
+            const endIndex = streamingRef.current.jsonBuffer.indexOf(endMarker);
+            const jsonContent = streamingRef.current.jsonBuffer.substring(0, endIndex);
+            
+            // Parse and handle the document analysis data
+            try {
+              const docData = JSON.parse(jsonContent);
+              if (docData && docData.documentId) {
+                // Trigger document viewer immediately
+                setDocumentAnalysis(docData.documentId, docData.highlights || []);
+              }
+            } catch (e) {
+              console.error('Error parsing document analysis JSON:', e);
+            }
+            
+            // Continue with content after the JSON block
+            filteredContent = streamingRef.current.jsonBuffer.substring(endIndex + endMarker.length);
+            streamingRef.current.inJsonBlock = false;
+            streamingRef.current.jsonBuffer = '';
+          } else {
+            // Still inside JSON block, don't show anything
+            return;
+          }
+        } else {
+          // Not in JSON block, check if we're starting one
+          const startIndex = data.data.indexOf(startMarker);
+          if (startIndex !== -1) {
+            // Found start marker
+            filteredContent = data.data.substring(0, startIndex);
+            streamingRef.current.inJsonBlock = true;
+            streamingRef.current.jsonBuffer = data.data.substring(startIndex + startMarker.length);
+            
+            // Check if the end marker is also in this chunk
+            const endIndex = streamingRef.current.jsonBuffer.indexOf(endMarker);
+            if (endIndex !== -1) {
+              const jsonContent = streamingRef.current.jsonBuffer.substring(0, endIndex);
+              
+              // Parse and handle the document analysis data
+              try {
+                const docData = JSON.parse(jsonContent);
+                if (docData && docData.documentId) {
+                  // Trigger document viewer immediately
+                  setDocumentAnalysis(docData.documentId, docData.highlights || []);
+                }
+              } catch (e) {
+                console.error('Error parsing document analysis JSON:', e);
+              }
+              
+              // Add any content after the JSON block
+              const afterJson = streamingRef.current.jsonBuffer.substring(endIndex + endMarker.length);
+              if (afterJson) {
+                filteredContent += afterJson;
+              }
+              streamingRef.current.inJsonBlock = false;
+              streamingRef.current.jsonBuffer = '';
+            }
+          }
+        }
+        
+        // Update message content
+        if (!streamingRef.current.added && filteredContent) {
+          setMessages(prev => [
+            ...prev,
             {
-              content: data.data,
+              content: filteredContent,
               messageId: data.messageId,
               chatId: chatId!,
               role: 'assistant',
-              sources: sources,
+              sources: streamingRef.current.sources,
               createdAt: new Date(),
               focusMode: focusMode,
             },
           ]);
-          added = true;
+          streamingRef.current.added = true;
+          streamingRef.current.currentMessage = filteredContent;
+          streamingRef.current.buffer = filteredContent;
+        } else if (filteredContent) {
+          streamingRef.current.currentMessage += filteredContent;
+          updateMessageContent(data.messageId, streamingRef.current.currentMessage);
         }
-
-        setMessages((prev) =>
-          prev.map((message) => {
-            if (message.messageId === data.messageId) {
-              return { ...message, content: message.content + data.data };
-            }
-
-            return message;
-          }),
-        );
-
-        recievedMessage += data.data;
         setMessageAppeared(true);
       }
 
       if (data.type === 'taskId') {
-        // Store task ID for progress tracking
-        setMessages((prev) =>
-          prev.map((msg) => {
+        setMessages(prev =>
+          prev.map(msg => {
             if (msg.messageId === data.messageId) {
               return { ...msg, taskId: data.data };
             }
             return msg;
-          }),
+          })
         );
       }
 
       if (data.type === 'messageEnd') {
-        setChatHistory((prevHistory) => [
-          ...prevHistory,
+        // Clear any pending updates
+        if (streamingRef.current.bufferTimeout) {
+          clearTimeout(streamingRef.current.bufferTimeout);
+        }
+
+        // Final update to ensure we have the complete message
+        setMessages(prev => {
+          const messageIndex = prev.findIndex(m => m.messageId === data.messageId);
+          if (messageIndex === -1) return prev;
+          
+          const updatedMessages = [...prev];
+          updatedMessages[messageIndex] = {
+            ...updatedMessages[messageIndex],
+            content: streamingRef.current.currentMessage
+          };
+          return updatedMessages;
+        });
+
+        setChatHistory(prev => [
+          ...prev,
           ['human', message],
-          ['assistant', recievedMessage],
+          ['assistant', streamingRef.current.currentMessage],
         ]);
 
         setLoading(false);
@@ -450,13 +619,14 @@ const ChatWindow = ({ id }: { id?: string }) => {
 
         const autoImageSearch = localStorage.getItem('autoImageSearch');
 
-        if (autoImageSearch === 'true') {
+        if (lastMsg && autoImageSearch === 'true') {
           document
             .getElementById(`search-images-${lastMsg.messageId}`)
             ?.click();
         }
 
         if (
+          lastMsg &&
           lastMsg.role === 'assistant' &&
           !lastMsg.suggestions
         ) {
@@ -464,13 +634,13 @@ const ChatWindow = ({ id }: { id?: string }) => {
             console.log('🤖 Loading suggestions for message:', lastMsg.messageId);
             const suggestions = await getSuggestions(messagesRef.current);
             console.log('✨ Suggestions loaded:', suggestions);
-            setMessages((prev) =>
-              prev.map((msg) => {
+            setMessages(prev =>
+              prev.map(msg => {
                 if (msg.messageId === lastMsg.messageId) {
-                  return { ...msg, suggestions: suggestions };
+                  return { ...msg, suggestions };
                 }
                 return msg;
-              }),
+              })
             );
           } catch (error) {
             console.error('❌ Failed to load suggestions:', error);
@@ -496,7 +666,7 @@ const ChatWindow = ({ id }: { id?: string }) => {
         focusMode: focusMode,
         optimizationMode: optimizationMode,
         history: chatHistory,
-        matterId: selectedMatterId,
+        matterId: currentMatter?.id || null,
         chatModel: {
           name: chatModelProvider.name,
           provider: chatModelProvider.provider,
@@ -522,16 +692,37 @@ const ChatWindow = ({ id }: { id?: string }) => {
 
       partialChunk += decoder.decode(value, { stream: true });
 
-      try {
-        const messages = partialChunk.split('\n');
-        for (const msg of messages) {
-          if (!msg.trim()) continue;
+      const messages = partialChunk.split('\n');
+      let lastProcessedIndex = -1;
+      
+      for (let i = 0; i < messages.length; i++) {
+        const msg = messages[i];
+        if (!msg.trim()) {
+          lastProcessedIndex = i;
+          continue;
+        }
+        
+        try {
           const json = JSON.parse(msg);
           messageHandler(json);
+          lastProcessedIndex = i;
+        } catch (error) {
+          // This message is incomplete, stop processing
+          if (i === messages.length - 1) {
+            // Last message might be incomplete
+            console.debug('Incomplete JSON, waiting for next chunk...');
+          } else {
+            // Non-last message shouldn't be incomplete
+            console.error('Invalid JSON in stream:', msg);
+            lastProcessedIndex = i;
+          }
+          break;
         }
-        partialChunk = '';
-      } catch (error) {
-        console.warn('Incomplete JSON, waiting for next chunk...');
+      }
+      
+      // Keep only the unprocessed part
+      if (lastProcessedIndex >= 0) {
+        partialChunk = messages.slice(lastProcessedIndex + 1).join('\n');
       }
     }
   };
@@ -608,8 +799,6 @@ const ChatWindow = ({ id }: { id?: string }) => {
             setFileIds={setFileIds}
             files={files}
             setFiles={setFiles}
-            selectedMatterId={selectedMatterId}
-            setSelectedMatterId={setSelectedMatterId}
           />
         )}
       </div>

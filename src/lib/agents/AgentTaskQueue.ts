@@ -241,7 +241,7 @@ export class AgentTaskQueue {
   private generateTaskName(agentType: string, query: string): string {
     const agentNames = {
       research: 'Legal Research',
-      'brief-writing': 'Brief Writing',
+      'brief-writing': 'Document Drafting',
       discovery: 'Discovery Review',
       contract: 'Contract Analysis'
     };

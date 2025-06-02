@@ -2,10 +2,13 @@ import { LegalAgent, AgentInput, AgentOutput, AgentCapability } from './types';
 import { MatterCacheEntry, CacheableResult, CacheSearchOptions } from './types/cache';
 import { supabaseAdmin } from '@/lib/supabase/client';
 import crypto from 'crypto';
+import { v4 as uuidv4 } from 'uuid';
+import { z } from 'zod';
+import { BaseAgentInputSchema, BaseAgentOutputSchema, validateAgentInput } from './schemas';
 
 export abstract class BaseAgent implements LegalAgent {
   abstract id: string;
-  abstract type: 'research' | 'writing' | 'analysis' | 'review' | 'discovery';
+  abstract type: 'research' | 'writing' | 'analysis' | 'review' | 'discovery' | 'deepResearch';
   abstract name: string;
   abstract description: string;
   abstract capabilities: AgentCapability[];
@@ -14,6 +17,54 @@ export abstract class BaseAgent implements LegalAgent {
   protected supabase = supabaseAdmin;
 
   abstract execute(input: AgentInput): Promise<AgentOutput>;
+
+  /**
+   * Get input schema for validation - can be overridden by specific agents
+   */
+  protected getInputSchema(): z.ZodSchema<any> {
+    return BaseAgentInputSchema;
+  }
+
+  /**
+   * Get output schema for validation - can be overridden by specific agents
+   */
+  protected getOutputSchema(): z.ZodSchema<any> {
+    return BaseAgentOutputSchema;
+  }
+
+  /**
+   * Validate input with Zod schema
+   */
+  protected validateInputWithSchema(input: unknown): AgentInput {
+    const schema = this.getInputSchema();
+    const result = validateAgentInput(schema, input);
+    
+    if (!result.success) {
+      throw new Error(`Invalid input for ${this.name}: ${result.error}`);
+    }
+    
+    return result.data as AgentInput;
+  }
+
+  /**
+   * Validate output with Zod schema
+   */
+  protected validateOutputWithSchema(output: unknown): AgentOutput {
+    const schema = this.getOutputSchema();
+    const result = schema.safeParse(output);
+    
+    if (!result.success) {
+      console.error(`Invalid output from ${this.name}:`, result.error);
+      // Don't throw - return error output instead
+      return {
+        success: false,
+        result: null,
+        error: `Invalid output format: ${result.error.message}`
+      };
+    }
+    
+    return result.data as AgentOutput;
+  }
 
   validateInput(input: AgentInput): boolean {
     if (input.matterId === undefined || !input.query) {
@@ -82,6 +133,13 @@ export abstract class BaseAgent implements LegalAgent {
     taskId: string,
     input: AgentInput
   ): Promise<string> {
+    // Validate input before creating execution
+    try {
+      this.validateInputWithSchema(input);
+    } catch (error) {
+      console.error('Input validation failed:', error);
+      throw error;
+    }
     try {
       const { data, error } = await this.supabase
         .from('agent_executions')
@@ -112,15 +170,17 @@ export abstract class BaseAgent implements LegalAgent {
     executionId: string,
     output: AgentOutput
   ): Promise<void> {
+    // Validate output before saving
+    const validatedOutput = this.validateOutputWithSchema(output);
     await this.supabase
       .from('agent_executions')
       .update({
-        status: output.success ? 'completed' : 'failed',
-        output_data: output,
+        status: validatedOutput.success ? 'completed' : 'failed',
+        output_data: validatedOutput,
         completed_at: new Date().toISOString(),
         progress: 100,
-        current_step: output.success ? 'Completed' : 'Failed',
-        error_message: output.error || null
+        current_step: validatedOutput.success ? 'Completed' : 'Failed',
+        error_message: validatedOutput.error || null
       })
       .eq('id', executionId);
   }
@@ -399,10 +459,23 @@ export abstract class BaseAgent implements LegalAgent {
    */
   private async updateCacheUsage(cacheId: string): Promise<void> {
     try {
+      // First get current usage count
+      const { data: current, error: fetchError } = await this.supabase
+        .from('matter_cache')
+        .select('usage_count')
+        .eq('id', cacheId)
+        .single();
+      
+      if (fetchError || !current) {
+        console.error('Error fetching cache entry:', fetchError);
+        return;
+      }
+      
+      // Then update with incremented count
       await this.supabase
         .from('matter_cache')
         .update({
-          usage_count: this.supabase.raw('usage_count + 1'),
+          usage_count: (current.usage_count || 0) + 1,
           last_used_at: new Date().toISOString()
         })
         .eq('id', cacheId);
@@ -459,7 +532,7 @@ export abstract class BaseAgent implements LegalAgent {
         // Simple keyword overlap scoring
         const cacheQueryWords = (cache.metadata?.originalQuery || '').toLowerCase().split(/\s+/);
         const currentQueryWords = currentQueryLower.split(/\s+/);
-        const commonWords = cacheQueryWords.filter(word => 
+        const commonWords = cacheQueryWords.filter((word: string) => 
           currentQueryWords.includes(word) && word.length > 3
         );
         
@@ -478,5 +551,159 @@ export abstract class BaseAgent implements LegalAgent {
       
       return { ...cache, relevanceScore: score };
     }).sort((a, b) => b.relevanceScore - a.relevanceScore);
+  }
+
+  // ===== DOCUMENT STORAGE METHODS =====
+
+  /**
+   * Save generated document to the documents table
+   */
+  protected async saveGeneratedDocument(
+    matterId: string | null,
+    content: string,
+    documentType: string,
+    metadata: {
+      title?: string;
+      summary?: string;
+      wordCount?: number;
+      pageCount?: number;
+      citations?: number;
+      outline?: any;
+      taskId?: string;
+      [key: string]: any;
+    }
+  ): Promise<string> {
+    try {
+      const documentId = uuidv4();
+      const timestamp = new Date().toISOString();
+      const filename = metadata.title 
+        ? `${metadata.title.replace(/[^a-zA-Z0-9-_ ]/g, '_')}.md`
+        : `${documentType}_${timestamp.split('T')[0]}_${documentId.substring(0, 8)}.md`;
+
+      const { data, error } = await this.supabase
+        .from('documents')
+        .insert({
+          id: documentId,
+          matter_id: matterId,
+          filename: filename,
+          file_type: 'text/markdown',
+          file_size: Buffer.byteLength(content, 'utf8'),
+          extracted_text: content,
+          summary: metadata.summary || content.substring(0, 500) + '...',
+          document_type: documentType,
+          processing_status: 'completed',
+          metadata: {
+            generated_by: 'agent',
+            agent_type: this.id,
+            agent_name: this.name,
+            task_id: metadata.taskId,
+            generation_timestamp: timestamp,
+            word_count: metadata.wordCount,
+            page_count: metadata.pageCount,
+            citation_count: metadata.citations,
+            outline: metadata.outline,
+            ...metadata
+          }
+        })
+        .select('id')
+        .single();
+
+      if (error) {
+        console.error('Error saving generated document:', error);
+        throw new Error(`Failed to save document: ${error.message}`);
+      }
+
+      console.log(`✅ Saved generated ${documentType} document: ${filename} (${documentId})`);
+      return documentId;
+    } catch (error) {
+      console.error('Error in saveGeneratedDocument:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Update an existing generated document
+   */
+  protected async updateGeneratedDocument(
+    documentId: string,
+    content: string,
+    metadata?: Record<string, any>
+  ): Promise<void> {
+    try {
+      const updateData: any = {
+        extracted_text: content,
+        file_size: Buffer.byteLength(content, 'utf8'),
+        updated_at: new Date().toISOString()
+      };
+
+      if (metadata) {
+        // Merge with existing metadata
+        const { data: existing } = await this.supabase
+          .from('documents')
+          .select('metadata')
+          .eq('id', documentId)
+          .single();
+
+        updateData.metadata = {
+          ...existing?.metadata,
+          ...metadata,
+          last_updated_by: this.id,
+          last_updated_at: new Date().toISOString()
+        };
+      }
+
+      const { error } = await this.supabase
+        .from('documents')
+        .update(updateData)
+        .eq('id', documentId);
+
+      if (error) {
+        throw new Error(`Failed to update document: ${error.message}`);
+      }
+
+      console.log(`✅ Updated document ${documentId}`);
+    } catch (error) {
+      console.error('Error in updateGeneratedDocument:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Check if a similar document already exists
+   */
+  protected async findSimilarDocument(
+    matterId: string | null,
+    documentType: string,
+    titlePattern?: string
+  ): Promise<string | null> {
+    try {
+      let query = this.supabase
+        .from('documents')
+        .select('id, filename, metadata')
+        .eq('document_type', documentType)
+        .eq('metadata->>generated_by', 'agent')
+        .eq('metadata->>agent_type', this.id)
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      if (matterId) {
+        query = query.eq('matter_id', matterId);
+      }
+
+      if (titlePattern) {
+        query = query.ilike('filename', `%${titlePattern}%`);
+      }
+
+      const { data, error } = await query;
+
+      if (error || !data || data.length === 0) {
+        return null;
+      }
+
+      return data[0].id;
+    } catch (error) {
+      console.error('Error in findSimilarDocument:', error);
+      return null;
+    }
   }
 }

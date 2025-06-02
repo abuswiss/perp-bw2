@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { FileText, Upload, Search, Filter, X, AlertCircle } from 'lucide-react';
+import { FileText, Upload, Search, Filter, X, AlertCircle, Trash2, MoreVertical } from 'lucide-react';
 import { supabase } from '@/lib/supabase/client';
 import { useMatter } from '@/contexts/MatterContext';
 
@@ -15,6 +15,8 @@ const DocumentsPage = () => {
   const [selectedMatter, setSelectedMatter] = useState<string>('');
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     loadDocuments();
@@ -95,6 +97,29 @@ const DocumentsPage = () => {
     setUploadFiles(prev => prev.filter((_, i) => i !== index));
   };
 
+  const handleDelete = async (documentId: string) => {
+    setDeleting(true);
+    try {
+      const response = await fetch(`/api/documents/${documentId}`, {
+        method: 'DELETE',
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to delete document');
+      }
+
+      // Refresh documents list
+      await loadDocuments();
+      setDeleteConfirmId(null);
+    } catch (error) {
+      console.error('Error deleting document:', error);
+      alert(error instanceof Error ? error.message : 'Failed to delete document');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const filteredDocuments = documents.filter(doc =>
     doc.filename?.toLowerCase().includes(searchQuery.toLowerCase()) ||
     doc.document_type?.toLowerCase().includes(searchQuery.toLowerCase())
@@ -149,13 +174,25 @@ const DocumentsPage = () => {
           {filteredDocuments.map((doc) => (
             <div
               key={doc.id}
-              className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 hover:shadow-lg transition-shadow cursor-pointer"
+              className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 hover:shadow-lg transition-shadow relative group"
             >
               <div className="flex items-start justify-between mb-2">
                 <FileText className="w-8 h-8 text-blue-600" />
-                <span className="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-800 rounded">
-                  {doc.document_type || 'Document'}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-800 rounded">
+                    {doc.document_type || 'Document'}
+                  </span>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setDeleteConfirmId(doc.id);
+                    }}
+                    className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
+                    title="Delete document"
+                  >
+                    <Trash2 className="w-4 h-4 text-red-500" />
+                  </button>
+                </div>
               </div>
               <h3 className="font-semibold text-black dark:text-white mb-1 truncate">
                 {doc.filename}
@@ -266,6 +303,46 @@ const DocumentsPage = () => {
                   {uploading ? 'Uploading...' : 'Upload'}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deleteConfirmId && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-md mx-4">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="p-3 bg-red-100 dark:bg-red-900 rounded-full">
+                <AlertCircle className="w-6 h-6 text-red-600 dark:text-red-400" />
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-black dark:text-white">Delete Document</h3>
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  This action cannot be undone
+                </p>
+              </div>
+            </div>
+
+            <p className="text-gray-700 dark:text-gray-300 mb-6">
+              Are you sure you want to delete this document? This will permanently remove the document and all associated data.
+            </p>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setDeleteConfirmId(null)}
+                disabled={deleting}
+                className="flex-1 px-4 py-2 bg-gray-300 dark:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-lg hover:bg-gray-400 dark:hover:bg-gray-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleDelete(deleteConfirmId)}
+                disabled={deleting}
+                className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {deleting ? 'Deleting...' : 'Delete'}
+              </button>
             </div>
           </div>
         </div>

@@ -12,6 +12,7 @@ import {
   ScrollText,
   Globe,
   SwatchBook,
+  Clock,
 } from 'lucide-react';
 import { SiReddit } from '@icons-pack/react-simple-icons';
 import { cn } from '@/lib/utils';
@@ -39,9 +40,9 @@ const legalFocusModes = [
     category: 'legal'
   },
   {
-    key: 'briefWriting',
-    title: 'Brief Writing',
-    description: 'Draft legal documents with citations',
+    key: 'documentDrafting',
+    title: 'Document Drafting',
+    description: 'Generate legal documents including memoranda, briefs, and other legal writing',
     icon: <FileText size={20} />,
     category: 'legal'
   },
@@ -54,7 +55,7 @@ const legalFocusModes = [
   },
   {
     key: 'contractAnalysis',
-    title: 'Contract Analysis',
+    title: 'Contract Reviewer',
     description: 'Review contracts and agreements',
     icon: <FileCheck size={20} />,
     category: 'legal'
@@ -64,6 +65,13 @@ const legalFocusModes = [
     title: 'Matter Docs',
     description: 'Search within current matter only',
     icon: <Briefcase size={20} />,
+    category: 'legal'
+  },
+  {
+    key: 'legalTimeline',
+    title: 'Timeline Generator',
+    description: 'Generate litigation timelines from case descriptions',
+    icon: <Clock size={20} />,
     category: 'legal'
   },
   // Hybrid modes that combine legal expertise with web search

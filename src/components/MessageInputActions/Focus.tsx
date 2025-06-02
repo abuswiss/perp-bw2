@@ -9,6 +9,8 @@ import {
   FileText,
   Search,
   FileCheck,
+  Clock,
+  Microscope,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
@@ -29,8 +31,8 @@ const focusModes = [
   },
   {
     key: 'briefWriting',
-    title: 'Brief Writing',
-    description: 'Generate legal documents and briefs',
+    title: 'Document Drafting',
+    description: 'Generate legal documents - from brief summaries to comprehensive analyses',
     icon: <FileText size={20} />,
   },
   {
@@ -38,6 +40,8 @@ const focusModes = [
     title: 'Discovery',
     description: 'Analyze documents for discovery',
     icon: <Search size={20} />,
+    isPro: true,
+    disabled: true,
   },
   {
     key: 'contractAnalysis',
@@ -46,10 +50,24 @@ const focusModes = [
     icon: <FileCheck size={20} />,
   },
   {
+    key: 'legalTimeline',
+    title: 'Timeline Generator',
+    description: 'Generate litigation timelines from case descriptions',
+    icon: <Clock size={20} />,
+  },
+  {
+    key: 'deepLegalResearch',
+    title: 'Deep Legal Research',
+    description: 'Comprehensive multi-source legal research with intelligent synthesis',
+    icon: <Microscope size={20} />,
+    isPro: true,
+  },
+  {
     key: 'academicSearch',
     title: 'Academic Legal',
     description: 'Search law reviews and legal scholarship',
     icon: <SwatchBook size={20} />,
+    isPro: true,
   },
   {
     key: 'webSearch',
@@ -57,12 +75,12 @@ const focusModes = [
     description: 'Search across the internet',
     icon: <Globe size={20} />,
   },
-  {
-    key: 'writingAssistant',
-    title: 'Writing Assistant',
-    description: 'General writing help',
-    icon: <Pencil size={16} />,
-  },
+  // {
+  //   key: 'writingAssistant',
+  //   title: 'Writing Assistant',
+  //   description: 'General writing help',
+  //   icon: <Pencil size={16} />,
+  // },
 ];
 
 const Focus = ({
@@ -104,33 +122,50 @@ const Focus = ({
       >
         <PopoverPanel className="absolute z-10 w-64 md:w-[500px] left-0">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2 bg-light-primary dark:bg-dark-primary border rounded-lg border-light-200 dark:border-dark-200 w-full p-4 max-h-[200px] md:max-h-none overflow-y-auto">
-            {focusModes.map((mode, i) => (
-              <PopoverButton
-                onClick={() => setFocusMode(mode.key)}
-                key={i}
-                className={cn(
-                  'p-2 rounded-lg flex flex-col items-start justify-start text-start space-y-2 duration-200 cursor-pointer transition',
-                  focusMode === mode.key
-                    ? 'bg-light-secondary dark:bg-dark-secondary'
-                    : 'hover:bg-light-secondary dark:hover:bg-dark-secondary',
-                )}
-              >
-                <div
+            {focusModes.map((mode, i) => {
+              const isDisabled = (mode as any).disabled || false;
+              return (
+                <PopoverButton
+                  onClick={() => !isDisabled && setFocusMode(mode.key)}
+                  key={i}
+                  disabled={isDisabled}
                   className={cn(
-                    'flex flex-row items-center space-x-1',
-                    focusMode === mode.key
-                      ? 'text-[#24A0ED]'
-                      : 'text-black dark:text-white',
+                    'p-2 rounded-lg flex flex-col items-start justify-start text-start space-y-2 duration-200 cursor-pointer transition relative',
+                    focusMode === mode.key && !isDisabled
+                      ? 'bg-light-secondary dark:bg-dark-secondary'
+                      : !isDisabled ? 'hover:bg-light-secondary dark:hover:bg-dark-secondary' : '',
+                    isDisabled && 'opacity-50 cursor-not-allowed'
                   )}
                 >
-                  {mode.icon}
-                  <p className="text-sm font-medium">{mode.title}</p>
-                </div>
-                <p className="text-black/70 dark:text-white/70 text-xs">
-                  {mode.description}
-                </p>
-              </PopoverButton>
-            ))}
+                  <div
+                    className={cn(
+                      'flex flex-row items-center space-x-1 w-full',
+                      focusMode === mode.key && !isDisabled
+                        ? 'text-[#24A0ED]'
+                        : 'text-black dark:text-white',
+                       isDisabled && 'text-gray-400 dark:text-gray-500'
+                    )}
+                  >
+                    {mode.icon}
+                    <p className="text-sm font-medium flex-grow">{mode.title}</p>
+                    {(mode as any).isPro && (
+                      <span className={cn(
+                        "ml-auto text-xs text-white px-1.5 py-0.5 rounded-full",
+                        isDisabled ? "bg-gray-400" : "bg-purple-500"
+                      )}>
+                        PRO
+                      </span>
+                    )}
+                  </div>
+                  <p className={cn(
+                     "text-xs",
+                     isDisabled ? "text-gray-400/70 dark:text-gray-500/70" : "text-black/70 dark:text-white/70"
+                  )}>
+                    {mode.description}
+                  </p>
+                </PopoverButton>
+              );
+            })}
           </div>
         </PopoverPanel>
       </Transition>

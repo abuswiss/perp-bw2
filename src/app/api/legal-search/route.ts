@@ -74,9 +74,9 @@ export async function POST(req: NextRequest) {
 
           sources = results.map(caseData => {
             // Ensure URL always points to CourtListener website
-            let url = caseData.absolute_url;
-            if (!url || !url.startsWith('http')) {
-              url = `https://www.courtlistener.com/opinion/${caseData.id}/`;
+            let url = '';
+            if (caseData.absolute_url) {
+              url = caseData.absolute_url.startsWith('http') ? caseData.absolute_url : `https://www.courtlistener.com${caseData.absolute_url}`;
             }
             
             return {
@@ -185,8 +185,11 @@ export async function POST(req: NextRequest) {
           sources: (storedCases || []).map(caseData => {
             // Ensure URL always points to CourtListener website for stored cases
             let url = '';
-            if (caseData.courtlistener_id) {
-              url = `https://www.courtlistener.com/opinion/${caseData.courtlistener_id}/`;
+            if (caseData.metadata?.absolute_url) {
+              url = `https://www.courtlistener.com${caseData.metadata.absolute_url}`;
+            } else if (caseData.courtlistener_id && caseData.metadata?.cluster_id) {
+              // Fallback: construct URL using cluster_id if available
+              url = `https://www.courtlistener.com/opinion/${caseData.metadata.cluster_id}/`;
             }
             
             return {

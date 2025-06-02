@@ -48,8 +48,17 @@ const Attach = ({
 
     const resData = await res.json();
 
-    setFiles([...files, ...resData.files]);
-    setFileIds([...fileIds, ...resData.files.map((file: any) => file.fileId)]);
+    if (!res.ok) {
+      console.error('Upload failed:', resData);
+      alert(resData.message || 'Failed to upload files');
+      setLoading(false);
+      return;
+    }
+
+    if (resData.files && Array.isArray(resData.files)) {
+      setFiles([...files, ...resData.files]);
+      setFileIds([...fileIds, ...resData.files.map((file: any) => file.fileId)]);
+    }
     setLoading(false);
   };
 

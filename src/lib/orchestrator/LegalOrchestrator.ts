@@ -1,8 +1,10 @@
 import { LegalAgent, AgentInput, AgentOutput, AgentOrchestrationPlan, AgentTask } from '@/lib/agents/types';
 import { ResearchAgent } from '@/lib/agents/ResearchAgent';
-import { BriefWritingAgent } from '@/lib/agents/BriefWritingAgent';
+import { DocumentDraftingAgent } from '@/lib/agents/DocumentDraftingAgent';
 import { DiscoveryAgent } from '@/lib/agents/DiscoveryAgent';
-import { ContractAgent } from '@/lib/agents/ContractAgent';
+import { DocumentAnalysisAgent } from '@/lib/agents/DocumentAnalysisAgent';
+import { TimelineAgent } from '@/lib/agents/TimelineAgent';
+import { DeepLegalResearchAgent } from '@/lib/agents/DeepLegalResearchAgent';
 import { AgentTaskQueue } from '@/lib/agents/AgentTaskQueue';
 import { supabaseAdmin } from '@/lib/supabase/client';
 import { ChatOpenAI } from '@langchain/openai';
@@ -40,14 +42,19 @@ export class LegalOrchestrator {
 
   private initializeAgents(): void {
     const researchAgent = new ResearchAgent();
-    const briefWritingAgent = new BriefWritingAgent();
+    const documentDraftingAgent = new DocumentDraftingAgent();
     const discoveryAgent = new DiscoveryAgent();
-    const contractAgent = new ContractAgent();
+    const documentAnalysisAgent = new DocumentAnalysisAgent();
+    const timelineAgent = new TimelineAgent();
+    const deepLegalResearchAgent = new DeepLegalResearchAgent();
 
     this.agents.set('research', researchAgent);
-    this.agents.set('brief-writing', briefWritingAgent);
+    this.agents.set('brief-writing', documentDraftingAgent);
+    this.agents.set('document-drafting', documentDraftingAgent);
     this.agents.set('discovery', discoveryAgent);
-    this.agents.set('contract', contractAgent);
+    this.agents.set('document-analysis', documentAnalysisAgent);
+    this.agents.set('timeline', timelineAgent);
+    this.agents.set('deep-legal-research', deepLegalResearchAgent);
   }
 
   async orchestrateWorkflow(
@@ -106,7 +113,7 @@ User Query: {query}
 
 Analyze and return the following in JSON format:
 {{
-  "primaryAction": "research|writing|analysis|discovery|contract_analysis|compliance|litigation",
+  "primaryAction": "research|writing|analysis|discovery|contract_analysis|compliance|litigation|timeline_generation",
   "secondaryActions": ["additional actions that may be needed"],
   "documentTypes": ["contract|brief|memo|motion|agreement|discovery|opinion|pleading"],
   "analysisDepth": "summary|standard|comprehensive|expert",
@@ -160,6 +167,9 @@ Focus on understanding the legal context and practical requirements.`);
       intent.primaryAction = 'discovery';
     } else if (query.includes('contract')) {
       intent.primaryAction = 'contract_analysis';
+    } else if (query.includes('timeline') || query.includes('schedule') || query.includes('stages') || 
+               query.includes('phases') || query.includes('litigation process') || query.includes('how long')) {
+      intent.primaryAction = 'timeline_generation';
     }
 
     // Determine document types
@@ -203,6 +213,8 @@ Available Agents:
 - brief-writing: Legal document drafting, memoranda, briefs
 - discovery: Document review, privilege analysis, discovery responses
 - contract: Contract analysis, risk assessment, term extraction
+- timeline: Generate litigation timelines
+- deep-legal-research: In-depth multi-source legal analysis: cases, statutes, academic papers, and vetted web sources with intelligent synthesis.
 
 Consider:
 1. Primary action requirements
@@ -226,7 +238,7 @@ Example: ["research", "brief-writing"] for a memo that needs research first.`);
       const agents = JSON.parse(cleanResult);
       
       // Validate agent names
-      const validAgents = ['research', 'brief-writing', 'discovery', 'contract'];
+      const validAgents = ['research', 'brief-writing', 'discovery', 'contract', 'timeline', 'deep-legal-research'];
       const filteredAgents = agents.filter((agent: string) => validAgents.includes(agent));
       
       return filteredAgents.length > 0 ? filteredAgents : ['research']; // Default fallback
@@ -238,48 +250,46 @@ Example: ["research", "brief-writing"] for a memo that needs research first.`);
 
   private determineRequiredAgentsBasic(intent: any, context?: Record<string, any>): string[] {
     const agents = [];
+    const action = intent.primaryAction?.toLowerCase();
+    const query = intent.userQuery?.toLowerCase() || JSON.stringify(intent).toLowerCase();
 
-    switch (intent.primaryAction) {
-      case 'research':
+    if (action === 'research' || query.includes('research') || query.includes('find cases') || query.includes('statutes')) {
+      if (query.includes('deep') || query.includes('comprehensive analysis') || query.includes('thorough research') || intent.analysisDepth === 'comprehensive') {
+        agents.push('deep-legal-research');
+      } else {
         agents.push('research');
-        if (intent.documentTypes?.includes('brief') || intent.documentTypes?.includes('memo')) {
-          agents.push('brief-writing');
-        }
-        break;
-
-      case 'writing':
-        agents.push('brief-writing');
-        if (!context?.skipResearch) {
-          agents.push('research'); // Research usually needed for writing
-        }
-        break;
-
-      case 'analysis':
-        if (intent.documentTypes?.includes('contract')) {
-          agents.push('contract');
-        } else {
-          agents.push('research');
-        }
-        break;
-
-      case 'discovery':
-        agents.push('discovery');
-        break;
-
-      case 'contract_analysis':
-        agents.push('contract');
-        if (intent.analysisDepth === 'comprehensive') {
-          agents.push('research'); // For regulatory compliance research
-        }
-        break;
-
-      default:
-        // Default workflow: research first
-        agents.push('research');
-        break;
+      }
+    }
+    if (action === 'writing' || query.includes('write') || query.includes('draft') || query.includes('generate memo')) {
+      agents.push('brief-writing');
+    }
+    if (action === 'discovery' || query.includes('discovery') || query.includes('review documents for privilege')) {
+      agents.push('discovery');
+    }
+    if (action === 'analysis' || query.includes('analyze document') || query.includes('review contract')) {
+      if (intent.documentTypes?.includes('contract') || query.includes('contract terms')) {
+         agents.push('contract');
+      } else {
+         agents.push('document-analysis');
+      }
+    }
+     if (action === 'contract_analysis' && this.agents.has('contract')) {
+      agents.push('contract');
+    }
+    if (action === 'timeline_generation' || query.includes('timeline') || query.includes('case stages')) {
+      agents.push('timeline');
+    }
+    if (!agents.includes('deep-legal-research') && (query.includes('deep legal research') || query.includes('comprehensive legal investigation'))) {
+        agents.push('deep-legal-research');
     }
 
-    return [...new Set(agents)]; // Remove duplicates
+    const uniqueAgents = [...new Set(agents)];
+    if (uniqueAgents.length === 0 && query.length > 0) {
+        if (query.includes('research') || query.includes('find')) return ['research'];
+        if (query.includes('analyze')) return ['document-analysis'];
+    }
+    
+    return uniqueAgents.length > 0 ? uniqueAgents : ['research'];
   }
 
   private buildDependencyGraph(requiredAgents: string[], intent: any): any[] {
@@ -291,7 +301,9 @@ Example: ["research", "brief-writing"] for a memo that needs research first.`);
       'research': [], // No dependencies
       'brief-writing': ['research'], // Depends on research
       'discovery': [], // Independent
-      'contract': [] // Independent
+      'contract': [], // Independent
+      'timeline': [], // Independent
+      'deep-legal-research': [] // Independent
     };
 
     for (const agentType of requiredAgents) {
@@ -317,7 +329,8 @@ Example: ["research", "brief-writing"] for a memo that needs research first.`);
       'research': 60,
       'brief-writing': 120,
       'discovery': 180,
-      'contract': 90
+      'contract': 90,
+      'deep-legal-research': 180
     };
 
     const base = baseDurations[agentType as keyof typeof baseDurations] || 60;

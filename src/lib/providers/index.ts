@@ -139,6 +139,29 @@ export const getAvailableEmbeddingModelProviders = async () => {
 };
 
 /**
+ * Get o3-mini model specifically for deep research
+ */
+export const getDeepResearchChatModel = async (): Promise<BaseChatModel | null> => {
+  try {
+    const openaiApiKey = process.env.OPENAI_API_KEY;
+    
+    if (!openaiApiKey) {
+      console.error('OpenAI API key not found for deep research');
+      return getDefaultChatModel(); // Fallback to default
+    }
+    
+    console.log('🧠 Using gpt-4.1 for deep research');
+    return new ChatOpenAI({
+      openAIApiKey: openaiApiKey,
+      modelName: 'gpt-4.1',
+    }) as unknown as BaseChatModel;
+  } catch (error) {
+    console.error('Failed to create gpt-4.1 model for deep research:', error);
+    return getDefaultChatModel(); // Fallback to default
+  }
+};
+
+/**
  * Get a default chat model for AI agent use
  * Prefers GPT-4o for legal research and analysis
  */

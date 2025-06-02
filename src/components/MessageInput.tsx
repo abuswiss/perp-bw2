@@ -1,11 +1,12 @@
 import { cn } from '@/lib/utils';
-import { ArrowUp } from 'lucide-react';
+import { ArrowUp, Mic, MicOff } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import TextareaAutosize from 'react-textarea-autosize';
-import Attach from './MessageInputActions/Attach';
+import DocumentSelector from './MessageInputActions/DocumentSelector';
 import CopilotToggle from './MessageInputActions/Copilot';
 import { File, Message } from './ChatWindow';
-import AttachSmall from './MessageInputActions/AttachSmall';
+import DocumentSelectorSmall from './MessageInputActions/DocumentSelectorSmall';
+import SpeechRecognition, { useSpeechRecognition } from 'react-speech-recognition';
 
 const MessageInput = ({
   sendMessage,
@@ -28,6 +29,14 @@ const MessageInput = ({
   const [message, setMessage] = useState('');
   const [textareaRows, setTextareaRows] = useState(1);
   const [mode, setMode] = useState<'multi' | 'single'>('single');
+
+  const {
+    transcript,
+    listening,
+    resetTranscript,
+    browserSupportsSpeechRecognition,
+    isMicrophoneAvailable,
+  } = useSpeechRecognition();
 
   useEffect(() => {
     if (textareaRows >= 2 && message && mode === 'single') {
@@ -61,21 +70,65 @@ const MessageInput = ({
     };
   }, []);
 
+  useEffect(() => {
+    if (transcript) {
+      setMessage(transcript);
+    }
+  }, [transcript]);
+
+  useEffect(() => {
+    return () => {
+      SpeechRecognition.stopListening();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (loading && listening) {
+      SpeechRecognition.stopListening();
+    }
+  }, [loading, listening]);
+
+  const handleSendMessage = () => {
+    if (loading) return;
+    sendMessage(message);
+    setMessage('');
+    resetTranscript();
+    if (listening) {
+      SpeechRecognition.stopListening();
+    }
+  };
+
+  const handleMicClick = () => {
+    if (!browserSupportsSpeechRecognition) {
+      console.error("Browser doesn't support speech recognition.");
+      return;
+    }
+    if (!isMicrophoneAvailable) {
+      console.error('Microphone is not available.');
+      return;
+    }
+
+    if (listening) {
+      SpeechRecognition.stopListening();
+    } else {
+      resetTranscript();
+      setMessage('');
+      SpeechRecognition.startListening({ continuous: true });
+    }
+  };
+
   // Suggestions are now handled in MessageBox, not here
 
   return (
       <form
         onSubmit={(e) => {
-          if (loading) return;
           e.preventDefault();
-          sendMessage(message);
-          setMessage('');
+          handleSendMessage();
         }}
         onKeyDown={(e) => {
-          if (e.key === 'Enter' && !e.shiftKey && !loading) {
+          if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
-            sendMessage(message);
-            setMessage('');
+            handleSendMessage();
           }
         }}
         className={cn(
@@ -84,7 +137,7 @@ const MessageInput = ({
         )}
       >
       {mode === 'single' && (
-        <AttachSmall
+        <DocumentSelectorSmall
           fileIds={fileIds}
           setFileIds={setFileIds}
           files={files}
@@ -108,6 +161,17 @@ const MessageInput = ({
             setCopilotEnabled={setCopilotEnabled}
           />
           <button
+            type="button"
+            onClick={handleMicClick}
+            className={cn(
+              "p-2 rounded-full transition-colors duration-200 hover:bg-black/10 dark:hover:bg-white/10",
+              listening ? "bg-red-500/20 hover:bg-red-500/30" : "bg-transparent",
+            )}
+            title={listening ? "Stop listening" : "Start listening"}
+          >
+            {listening ? <MicOff size={17} className="text-red-500" /> : <Mic size={17} className="text-black/70 dark:text-white/70" />}
+          </button>
+          <button
             disabled={message.trim().length === 0 || loading}
             className="bg-[#24A0ED] text-white disabled:text-black/50 dark:disabled:text-white/50 hover:bg-opacity-85 transition duration-100 disabled:bg-[#e0e0dc79] dark:disabled:bg-[#ececec21] rounded-full p-2"
           >
@@ -117,7 +181,7 @@ const MessageInput = ({
       )}
       {mode === 'multi' && (
         <div className="flex flex-row items-center justify-between w-full pt-2">
-          <AttachSmall
+          <DocumentSelectorSmall
             fileIds={fileIds}
             setFileIds={setFileIds}
             files={files}
@@ -128,6 +192,17 @@ const MessageInput = ({
               copilotEnabled={copilotEnabled}
               setCopilotEnabled={setCopilotEnabled}
             />
+            <button
+              type="button"
+              onClick={handleMicClick}
+              className={cn(
+                "p-2 rounded-full transition-colors duration-200 hover:bg-black/10 dark:hover:bg-white/10",
+                listening ? "bg-red-500/20 hover:bg-red-500/30" : "bg-transparent",
+              )}
+              title={listening ? "Stop listening" : "Start listening"}
+            >
+              {listening ? <MicOff size={17} className="text-red-500" /> : <Mic size={17} className="text-black/70 dark:text-white/70" />}
+            </button>
             <button
               disabled={message.trim().length === 0 || loading}
               className="bg-[#24A0ED] text-white text-black/50 dark:disabled:text-white/50 hover:bg-opacity-85 transition duration-100 disabled:bg-[#e0e0dc79] dark:disabled:bg-[#ececec21] rounded-full p-2"

@@ -42,6 +42,10 @@ const openaiChatModels: Record<string, string>[] = [
     displayName: 'GPT 4.1',
     key: 'gpt-4.1',
   },
+  {
+    displayName: 'o3-mini-2025-01-31',
+    key: 'o3-mini-2025-01-31',
+  },
 ];
 
 const openaiEmbeddingModels: Record<string, string>[] = [

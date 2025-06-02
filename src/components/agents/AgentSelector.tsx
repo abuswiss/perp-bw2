@@ -39,9 +39,9 @@ export default function AgentSelector({ onAgentSelect, selectedAgent, query }: A
       getRequiredPermissions: () => []
     },
     {
-      id: 'brief-writing-agent',
+      id: 'document-drafting-agent',
       type: 'writing',
-      name: 'Legal Brief Writing Agent',
+      name: 'Legal Document Drafting Agent',
       description: 'Generate legal documents including memoranda, briefs, and other legal writing',
       capabilities: [
         {
@@ -93,30 +93,37 @@ export default function AgentSelector({ onAgentSelect, selectedAgent, query }: A
       getRequiredPermissions: () => []
     },
     {
-      id: 'contract-agent',
+      id: 'document-analysis-agent',
       type: 'analysis',
-      name: 'Contract Analysis Agent',
-      description: 'Comprehensive contract analysis, risk assessment, and term extraction',
+      name: 'Document Analysis Agent',
+      description: 'Comprehensive legal document analysis with visual highlighting and interactive Q&A',
       capabilities: [
         {
-          name: 'Contract Term Extraction',
-          description: 'Extract and analyze key contract terms and clauses',
-          inputTypes: ['contract_document', 'contract_type', 'term_categories'],
-          outputTypes: ['extracted_terms', 'term_analysis', 'clause_map'],
-          estimatedDuration: 90
+          name: 'Interactive Document Analysis',
+          description: 'Analyze any legal document with visual highlighting and references',
+          inputTypes: ['document', 'user_question'],
+          outputTypes: ['analysis', 'highlights', 'references', 'document_positions'],
+          estimatedDuration: 30
         },
         {
-          name: 'Risk Assessment',
-          description: 'Identify and evaluate contractual risks and liabilities',
-          inputTypes: ['contract_document', 'risk_profile', 'industry_standards'],
-          outputTypes: ['risk_analysis', 'liability_assessment', 'mitigation_recommendations'],
-          estimatedDuration: 120
+          name: 'Document Type Detection',
+          description: 'Automatically detect and adapt analysis for different document types',
+          inputTypes: ['document'],
+          outputTypes: ['document_type', 'analysis_strategy'],
+          estimatedDuration: 10
+        },
+        {
+          name: 'Section-by-Section Review',
+          description: 'Detailed analysis of specific document sections with cross-references',
+          inputTypes: ['document', 'section_reference'],
+          outputTypes: ['section_analysis', 'cross_references', 'highlights'],
+          estimatedDuration: 25
         }
       ],
-      requiredContext: ['matter_info'],
+      requiredContext: [],
       execute: async () => ({ success: true, result: null }),
       validateInput: () => true,
-      estimateDuration: () => 90,
+      estimateDuration: () => 30,
       getRequiredPermissions: () => []
     }
   ]);
@@ -137,11 +144,11 @@ export default function AgentSelector({ onAgentSelect, selectedAgent, query }: A
     if (lowerQuery.includes('research') || lowerQuery.includes('find') || lowerQuery.includes('case law')) {
       return 'research-agent';
     } else if (lowerQuery.includes('write') || lowerQuery.includes('draft') || lowerQuery.includes('memo')) {
-      return 'brief-writing-agent';
+      return 'document-drafting-agent';
     } else if (lowerQuery.includes('discovery') || lowerQuery.includes('privilege') || lowerQuery.includes('review documents')) {
       return 'discovery-agent';
-    } else if (lowerQuery.includes('contract') || lowerQuery.includes('agreement')) {
-      return 'contract-agent';
+    } else if (lowerQuery.includes('contract') || lowerQuery.includes('agreement') || lowerQuery.includes('document') || lowerQuery.includes('analyze')) {
+      return 'document-analysis-agent';
     }
     
     return null;

@@ -2,12 +2,18 @@ import { BaseAgent } from './BaseAgent';
 import { AgentInput, AgentOutput, AgentCapability, Citation } from './types';
 import { CourtListenerAPI } from '@/lib/integrations/courtlistener';
 import { searchSearxng } from '@/lib/searxng';
-import { ChatOpenAI } from '@langchain/openai';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
-import { PromptTemplate, ChatPromptTemplate } from '@langchain/core/prompts';
+import { PromptTemplate } from '@langchain/core/prompts';
 import { StringOutputParser } from '@langchain/core/output_parsers';
 import { getDefaultChatModel } from '@/lib/providers';
 import { v4 as uuidv4 } from 'uuid';
+import { ResearchAgentInputSchema, ResearchAgentOutputSchema } from './schemas';
+import { Document } from '@langchain/core/documents';
+import computeSimilarity from '@/lib/utils/computeSimilarity';
+import type { Embeddings } from '@langchain/core/embeddings';
+import { supabaseAdmin } from '@/lib/supabase/client';
+import path from 'node:path';
+import fs from 'node:fs';
 
 export class ResearchAgent extends BaseAgent {
   id = 'research-agent';
@@ -57,6 +63,14 @@ export class ResearchAgent extends BaseAgent {
     this.initializeLLM();
   }
 
+  protected getInputSchema() {
+    return ResearchAgentInputSchema;
+  }
+
+  protected getOutputSchema() {
+    return ResearchAgentOutputSchema;
+  }
+
   private async initializeLLM() {
     try {
       this.llm = await getDefaultChatModel();
@@ -83,120 +97,46 @@ export class ResearchAgent extends BaseAgent {
       const taskId = input.context?.task_id || uuidv4();
       const executionId = await this.createExecution(taskId, input);
       
-      // Check for exact cache match first
-      await this.logExecution(taskId, 'Checking for cached research results', 5);
-      const exactMatch = await this.getExactCacheMatch(input.query, input.matterId, input.parameters);
+      // Step 1: Search all sources (like Perplexica MetaSearchAgent)
+      await this.logExecution(taskId, 'Searching legal sources', 20);
+      const allDocs = await this.searchAllSources(input.query, input.parameters);
       
-      if (exactMatch) {
-        console.log('🎯 Found exact cache match for research query');
-        await this.logExecution(taskId, 'Using cached research results', 100);
-        
-        const output: AgentOutput = {
-          success: true,
-          result: {
-            ...exactMatch.result_data,
-            cached: true,
-            cacheInfo: {
-              originalQuery: exactMatch.metadata?.originalQuery,
-              cachedAt: exactMatch.created_at,
-              usageCount: exactMatch.usage_count
-            }
-          },
-          citations: exactMatch.result_data.citations || [],
-          metadata: {
-            cached: true,
-            originalExecutionTime: exactMatch.metadata?.executionTime,
-            ...exactMatch.metadata
-          },
-          executionTime: Date.now() - startTime
-        };
-        
-        await this.completeExecution(executionId, output);
-        return output;
-      }
-
-      // Check for related cached results that might inform our research
-      const relatedResults = await this.getCachedResults(input.matterId, {
-        resultTypes: ['case_research', 'legal_analysis', 'statutory_research'],
-        maxAgeHours: 72, // Look back 3 days for related research
-        limit: 5
-      });
+      // Step 2: Rerank and filter sources by relevance 
+      await this.logExecution(taskId, 'Ranking source relevance', 40);
+      const rankedDocs = await this.rerankSources(input.query, allDocs);
       
-      if (relatedResults.length > 0) {
-        const relevantResults = this.assessCacheRelevance(relatedResults, input.query);
-        console.log(`💡 Found ${relevantResults.length} related cached results to inform research`);
-      }
+      const webCount = rankedDocs.filter(d => d.metadata.type === 'web').length;
+      const caseCount = rankedDocs.filter(d => d.metadata.type === 'case').length;
+      console.log('📊 After ranking - Web sources:', webCount, 'Case sources:', caseCount);
       
-      // Step 1: Analyze query and extract legal concepts using AI
-      await this.logExecution(taskId, 'Analyzing query and extracting legal concepts', 10);
-      const legalConcepts = await this.extractLegalConceptsWithAI(input.query);
-      const researchPlan = await this.createResearchPlan(input.query, legalConcepts, input.parameters);
-
-      // Step 2: Execute case law search
-      await this.logExecution(taskId, 'Searching case law databases', 30);
-      const caseResults = await this.searchCaseLaw(input.query, input.parameters);
-
-      // Step 3: Conduct statutory research
-      await this.logExecution(taskId, 'Researching statutes and regulations', 50);
-      const statuteResults = await this.searchStatutes(input.query, input.parameters);
-
-      // Step 4: Perform web research for additional context
-      await this.logExecution(taskId, 'Gathering additional legal context from web sources', 70);
-      const webResults = await this.searchWebLegal(input.query, input.parameters);
-
-      // Step 5: Synthesize findings using AI analysis
-      await this.logExecution(taskId, 'Synthesizing research findings', 90);
-      const synthesis = await this.synthesizeFindingsWithAI(caseResults, statuteResults, webResults, input.query);
-
-      // Step 6: Generate comprehensive report
-      await this.logExecution(taskId, 'Generating research report', 95);
-      const report = await this.generateResearchReport(synthesis, input.matterId);
+      // Step 3: Generate citations from sources
+      const citations = this.createCitations(rankedDocs);
+      
+      // Step 4: Get document context if available
+      await this.logExecution(taskId, 'Loading document context', 60);
+      const documentContext = await this.getDocumentContext(input.matterId, input.context?.fileIds);
+      
+      // Step 5: Generate single comprehensive response
+      await this.logExecution(taskId, 'Generating legal analysis', 90);
+      const response = await this.generateLegalResponse(input.query, rankedDocs, documentContext);
 
       const output: AgentOutput = {
         success: true,
         result: {
-          researchPlan,
-          caseResults,
-          statuteResults,
-          webResults,
-          synthesis,
-          report,
-          legalConcepts,
-          summary: synthesis.summary
+          response,
+          sources: rankedDocs.slice(0, 20), // Up to 10 cases + 10 web
+          query: input.query,
+          summary: response.split('\n')[0] // First line as summary
         },
-        citations: [
-          ...caseResults.citations,
-          ...statuteResults.citations,
-          ...webResults.citations
-        ],
+        citations,
         metadata: {
-          totalCases: caseResults.cases.length,
-          totalStatutes: statuteResults.statutes.length,
-          totalWebSources: webResults.sources.length,
-          conceptsIdentified: legalConcepts.length,
+          totalSources: allDocs.length,
+          rankedSources: rankedDocs.length,
           executionId,
           executionTime: Date.now() - startTime
         },
         executionTime: Date.now() - startTime
       };
-
-      // Cache the research results for other agents to use
-      await this.logExecution(taskId, 'Caching research results for future use', 98);
-      const cacheableResult = {
-        type: 'legal_research',
-        title: `Legal Research: ${input.query.substring(0, 100)}${input.query.length > 100 ? '...' : ''}`,
-        summary: synthesis.summary || `Research findings on ${input.query}`,
-        data: output.result,
-        metadata: {
-          confidence: 0.9,
-          sourceCount: (caseResults.cases?.length || 0) + (statuteResults.statutes?.length || 0),
-          conceptsCount: legalConcepts.length,
-          executionTime: output.executionTime
-        },
-        expirationHours: 48 // Research stays fresh for 2 days
-      };
-
-      await this.cacheResult(input.matterId, input.query, cacheableResult, input.parameters);
 
       await this.completeExecution(executionId, output);
       return output;
@@ -213,676 +153,583 @@ export class ResearchAgent extends BaseAgent {
     }
   }
 
-  private async createResearchPlan(
-    query: string, 
-    concepts: any, 
-    parameters?: Record<string, any>
-  ): Promise<any> {
-    const searchStrategy = await this.determineSearchStrategyWithAI(query, concepts);
+  private async searchAllSources(query: string, parameters?: Record<string, any>): Promise<Document[]> {
+    const allDocs: Document[] = [];
     
-    return {
-      query,
-      concepts,
-      searchStrategy,
-      jurisdiction: parameters?.jurisdiction || 'federal',
-      dateRange: parameters?.dateRange,
-      priority: parameters?.priority || 'comprehensive',
-      estimatedDuration: this.estimateDuration({ query, parameters } as AgentInput)
-    };
-  }
-
-  private async extractLegalConceptsWithAI(query: string): Promise<any> {
-    if (!this.llm) {
-      // Fallback to basic concept extraction
-      return this.extractLegalConceptsBasic(query);
-    }
-
-    const conceptPrompt = PromptTemplate.fromTemplate(`
-You are a legal research specialist. Analyze the following legal query and extract key legal concepts.
-
-Query: {query}
-
-Extract and return the following in JSON format:
-{{
-  "primaryLegalIssues": ["list of main legal issues"],
-  "secondaryIssues": ["list of related legal issues"],
-  "jurisdiction": "inferred jurisdiction (federal, state, or unknown)",
-  "practiceAreas": ["relevant practice areas"],
-  "keyTerms": ["important legal terms and concepts"],
-  "searchQueries": ["optimized search queries for case law"],
-  "researchPriority": "high|medium|low"
-}}
-
-Focus on extracting actionable legal concepts that will help in case law and statutory research.`);
-
+    // Enhanced Court Listener search with advanced filtering
     try {
-      const chain = conceptPrompt.pipe(this.llm).pipe(this.strParser);
-      const result = await chain.invoke({ query });
-      
-      // Parse JSON response
-      const cleanResult = result.replace(/```json\n?|```/g, '').trim();
-      return JSON.parse(cleanResult);
+      console.log('🔍 Starting CourtListener search for:', query);
+      await this.searchCourtListenerAdvanced(query, parameters, allDocs);
+      const caseCount = allDocs.filter(doc => doc.metadata.type === 'case').length;
+      console.log('📊 CourtListener results:', caseCount, 'cases found');
+      if (caseCount > 0) {
+        console.log('📄 Sample case:', allDocs.find(doc => doc.metadata.type === 'case')?.metadata);
+      }
     } catch (error) {
-      console.error('AI concept extraction failed:', error);
-      return this.extractLegalConceptsBasic(query);
+      console.error('Court Listener search failed:', error);
     }
-  }
-
-  private extractLegalConceptsBasic(query: string): any {
-    // Fallback basic extraction
-    const legalTerms = ['contract', 'tort', 'negligence', 'jurisdiction', 'damages', 'liability', 'constitutional', 'criminal', 'civil'];
-    const foundTerms = legalTerms.filter(term => query.toLowerCase().includes(term));
     
-    return {
-      primaryLegalIssues: foundTerms.slice(0, 3),
-      secondaryIssues: [],
-      jurisdiction: 'unknown',
-      practiceAreas: foundTerms,
-      keyTerms: foundTerms,
-      searchQueries: [query],
-      researchPriority: 'medium'
-    };
-  }
-
-  private async determineSearchStrategyWithAI(query: string, concepts: any): Promise<string> {
-    if (!this.llm) {
-      return 'comprehensive';
-    }
-
-    const strategyPrompt = PromptTemplate.fromTemplate(`
-Based on the legal query and extracted concepts, determine the optimal research strategy.
-
-Query: {query}
-Concepts: {concepts}
-
-Choose the most appropriate strategy:
-1. procedural_focused - For procedural motions, jurisdiction, venue issues
-2. substantive_liability - For liability, damages, breach of contract issues
-3. constitutional_analysis - For constitutional law issues
-4. statutory_interpretation - For statute interpretation and regulatory issues
-5. comprehensive - For complex multi-faceted legal issues
-
-Return only the strategy name.`);
-
+    // Search web for legal sources
     try {
-      const chain = strategyPrompt.pipe(this.llm).pipe(this.strParser);
-      const strategy = await chain.invoke({ 
-        query, 
-        concepts: JSON.stringify(concepts) 
-      });
-      
-      return strategy.trim();
-    } catch (error) {
-      console.error('AI strategy determination failed:', error);
-      return 'comprehensive';
-    }
-  }
-
-  private async searchCaseLaw(query: string, parameters?: Record<string, any>): Promise<any> {
-    try {
-      // Optimize search query using AI
-      const optimizedQuery = await this.optimizeCaseSearchQuery(query);
-      
-      const searchOptions = {
-        court: parameters?.court,
-        dateAfter: parameters?.dateRange?.start,
-        dateBefore: parameters?.dateRange?.end,
-        order_by: '-score'
-      };
-
-      const results = await this.courtListener.searchOpinions(optimizedQuery, searchOptions);
-      
-      const cases = results.results || [];
-      const citations: Citation[] = cases.map((caseItem: any) => {
-        // Ensure URL always points to CourtListener website
-        let url = caseItem.absolute_url;
-        if (!url || !url.startsWith('http')) {
-          url = `https://www.courtlistener.com/opinion/${caseItem.id}/`;
-        }
-        
-        return {
-          id: caseItem.id.toString(),
-          type: 'case' as const,
-          title: caseItem.case_name,
-          citation: caseItem.citation?.neutral || caseItem.citation?.federal || caseItem.citation?.state,
-          court: caseItem.court,
-          date: caseItem.date_filed,
-          url: url,
-          relevance: caseItem.score
-        };
-      });
-
-      // Store cases in database for future reference
-      await this.storeCasesInDB(cases);
-
-      return {
-        cases,
-        citations,
-        totalResults: results.count,
-        strategy: 'case_law_search'
-      };
-    } catch (error) {
-      console.error('Case law search failed:', error);
-      return {
-        cases: [],
-        citations: [],
-        totalResults: 0,
-        error: error instanceof Error ? error.message : 'Case law search failed'
-      };
-    }
-  }
-
-  private async searchStatutes(query: string, parameters?: Record<string, any>): Promise<any> {
-    // Optimize statutory search using AI
-    const optimizedQuery = await this.optimizeStatutorySearchQuery(query);
-    
-    try {
-      const results = await searchSearxng(optimizedQuery, {
+      console.log('🌐 Starting web search for:', query);
+      const webResults = await searchSearxng(query + ' law legal statute case', {
         categories: ['general'],
         engines: ['google', 'bing']
       });
-
-      const statutes = results.results
-        .filter((result: any) => 
-          result.url.includes('uscode') || 
-          result.url.includes('law.cornell.edu') ||
-          result.url.includes('govinfo.gov') ||
-          result.title.toLowerCase().includes('statute') ||
-          result.title.toLowerCase().includes('code')
-        )
-        .slice(0, 10);
-
-      const citations: Citation[] = statutes.map((statute: any, index: number) => ({
-        id: `statute-${index}`,
-        type: 'statute' as const,
-        title: statute.title,
-        url: statute.url,
-        relevance: 1 - (index * 0.1)
-      }));
-
-      return {
-        statutes,
-        citations,
-        totalResults: statutes.length,
-        strategy: 'statutory_search'
-      };
-    } catch (error) {
-      console.error('Statute search failed:', error);
-      // Return fallback statutory information based on common legal principles
-      return this.generateStatutoryFallback(query);
-    }
-  }
-
-  private async searchWebLegal(query: string, parameters?: Record<string, any>): Promise<any> {
-    // Optimize web legal search using AI
-    const optimizedQuery = await this.optimizeLegalWebSearchQuery(query);
-    
-    try {
-      const results = await searchSearxng(optimizedQuery, {
-        categories: ['general'],
-        engines: ['google', 'bing', 'scholar']
-      });
-
-      const sources = results.results
-        .filter((result: any) => 
-          result.url.includes('ssrn.com') ||
-          result.url.includes('heinonline.org') ||
-          result.url.includes('westlaw.com') ||
-          result.url.includes('lexisnexis.com') ||
-          result.url.includes('scholar.google.com') ||
-          result.title.toLowerCase().includes('law review') ||
-          result.content?.toLowerCase().includes('legal analysis')
-        )
-        .slice(0, 15);
-
-      const citations: Citation[] = sources.map((source: any, index: number) => ({
-        id: `web-${index}`,
-        type: 'web' as const,
-        title: source.title,
-        url: source.url,
-        relevance: 1 - (index * 0.05)
-      }));
-
-      return {
-        sources,
-        citations,
-        totalResults: sources.length,
-        strategy: 'web_legal_search'
-      };
-    } catch (error) {
-      console.error('Web legal search failed:', error);
-      // Return fallback web information based on legal query
-      return this.generateWebFallback(query);
-    }
-  }
-
-  private async synthesizeFindingsWithAI(
-    caseResults: any,
-    statuteResults: any,
-    webResults: any,
-    query: string
-  ): Promise<any> {
-    if (!this.llm) {
-      return this.synthesizeFindingsBasic(caseResults, statuteResults, webResults, query);
-    }
-
-    const synthesisPrompt = PromptTemplate.fromTemplate(`
-You are an expert legal research analyst. Synthesize the following research findings into a comprehensive, professional-grade legal analysis.
-
-Original Query: {query}
-
-Case Law Results: {caseResults}
-Statutory Results: {statuteResults}
-Web/Secondary Sources: {webResults}
-
-Provide a detailed, structured analysis in JSON format. Use your legal expertise to provide thorough analysis:
-
-{{
-  "executiveSummary": "Comprehensive overview of key legal findings and their significance",
-  "primaryAuthorities": [
-    {{
-      "type": "case|statute|regulation",
-      "title": "Full title/name with proper citation",
-      "significance": "Detailed explanation of legal significance and precedential value",
-      "citation": "Complete legal citation in proper format",
-      "keyHolding": "The key legal principle or rule established",
-      "applicability": "How this applies to the original query"
-    }}
-  ],
-  "legalAnalysis": "In-depth legal analysis including:\n- Legal standards and tests\n- Element-by-element analysis\n- Jurisdictional considerations\n- Policy rationales\n- Practical implications\n- Potential counterarguments",
-  "distinctions": "Important factual or legal distinctions that affect application",
-  "practicalGuidance": "Specific, actionable guidance for practitioners",
-  "gaps": ["Areas requiring additional research with specific recommendations"],
-  "recommendations": ["Detailed next steps for further research or legal strategy"],
-  "confidence": "high|medium|low - with explanation of assessment basis",
-  "jurisdictionalNotes": "Important jurisdictional variations or conflicts",
-  "recentDevelopments": "Any recent legal developments that may affect analysis"
-}}
-
-Prioritize accuracy, depth of analysis, and practical application. Consider both federal and state law implications where relevant.`);
-
-    try {
-      // With GPT-4o's larger context window, we can use more complete data
-      const processedCaseResults = {
-        cases: caseResults.cases?.slice(0, 10).map((c: any) => ({
-          case_name: c.case_name,
-          court: c.court,
-          date: c.date,
-          citation: c.citation,
-          summary: c.summary?.substring(0, 500) // Increased from 200 to 500
-        })) || [],
-        totalResults: caseResults.totalResults || 0,
-        strategy: caseResults.strategy
-      };
       
-      const processedStatuteResults = {
-        statutes: statuteResults.statutes?.slice(0, 10).map((s: any) => ({
-          title: s.title,
-          url: s.url,
-          content: s.content?.substring(0, 500) // Increased from 200 to 500
-        })) || [],
-        totalResults: statuteResults.totalResults || 0,
-        strategy: statuteResults.strategy
-      };
+      console.log('🌐 Web search results:', webResults.results?.length || 0, 'found');
+      let webSourcesAdded = 0;
       
-      const processedWebResults = {
-        sources: webResults.sources?.slice(0, 10).map((w: any) => ({
-          title: w.title,
-          url: w.url,
-          content: w.content?.substring(0, 500) // Increased from 200 to 500
-        })) || [],
-        totalResults: webResults.totalResults || 0,
-        strategy: webResults.strategy
-      };
-
-      const chain = synthesisPrompt.pipe(this.llm).pipe(this.strParser);
-      const result = await chain.invoke({
-        query,
-        caseResults: JSON.stringify(processedCaseResults, null, 2),
-        statuteResults: JSON.stringify(processedStatuteResults, null, 2),
-        webResults: JSON.stringify(processedWebResults, null, 2)
-      });
-      
-      const cleanResult = result.replace(/```json\n?|```/g, '').trim();
-      const synthesis = JSON.parse(cleanResult);
-      
-      return {
-        query,
-        ...synthesis,
-        timestamp: new Date().toISOString(),
-        totalSources: {
-          cases: caseResults.cases?.length || 0,
-          statutes: statuteResults.statutes?.length || 0,
-          webSources: webResults.sources?.length || 0
+      for (const result of webResults.results.slice(0, 15)) {
+        // More lenient filtering - include legal sources and relevant government/educational sites
+        if (this.isRelevantSource(result.url, query)) {
+          allDocs.push(new Document({
+            pageContent: result.content || result.title,
+            metadata: {
+              type: 'web',
+              title: result.title || 'Unknown Source',
+              url: result.url,
+              relevance: this.isLegalSource(result.url) ? 0.8 : 0.6
+            }
+          }));
+          webSourcesAdded++;
         }
-      };
+      }
+      console.log('🌐 Web sources added after filtering:', webSourcesAdded);
+      if (webSourcesAdded > 0) {
+        console.log('🌐 Sample web source:', allDocs.filter(d => d.metadata.type === 'web')[0]?.metadata);
+      }
     } catch (error) {
-      console.error('AI synthesis failed:', error);
-      return this.synthesizeFindingsBasic(caseResults, statuteResults, webResults, query);
+      console.error('Web search failed:', error);
     }
+    
+    return allDocs;
   }
 
-  private synthesizeFindingsBasic(
-    caseResults: any,
-    statuteResults: any,
-    webResults: any,
-    query: string
-  ): any {
-    const keyFindings = [];
+  private async searchCourtListenerAdvanced(query: string, parameters: Record<string, any> = {}, allDocs: Document[]): Promise<void> {
+    // Determine target jurisdictions based on query analysis
+    const jurisdictions = this.determineRelevantJurisdictions(query, parameters);
     
-    // Analyze case law findings
-    if (caseResults.cases?.length > 0) {
-      const topCases = caseResults.cases.slice(0, 5);
-      keyFindings.push({
-        type: 'case_law',
-        summary: `Found ${caseResults.cases.length} relevant cases`,
-        keyPoints: topCases.map((caseItem: any) => ({
-          case: caseItem.case_name,
-          court: caseItem.court,
-          relevance: caseItem.score,
-          citation: caseItem.citation?.neutral || caseItem.citation?.federal
-        }))
-      });
+    // Generate optimized search query using LLM
+    let optimizedQuery = await this.optimizeSearchQuery(query);
+    
+    // Clean up quotes that might wrap the entire query
+    optimizedQuery = optimizedQuery.trim();
+    if (optimizedQuery.startsWith('"') && optimizedQuery.endsWith('"') && optimizedQuery.length > 2) {
+      // Check if there are no other quotes in the middle
+      const innerQuery = optimizedQuery.slice(1, -1);
+      if (!innerQuery.includes('"')) {
+        optimizedQuery = innerQuery;
+      }
     }
-
-    // Analyze statutory findings
-    if (statuteResults.statutes?.length > 0) {
-      keyFindings.push({
-        type: 'statutory',
-        summary: `Found ${statuteResults.statutes.length} relevant statutes and regulations`,
-        keyPoints: statuteResults.statutes.slice(0, 3).map((statute: any) => ({
-          title: statute.title,
-          url: statute.url
-        }))
-      });
+    
+    console.log('🔍 Original query:', query);
+    console.log('✨ Optimized query:', optimizedQuery);
+    
+    // Enhanced search with multiple strategies
+    const searchPromises = [];
+    
+    // Strategy 1: Targeted jurisdiction search with optimized query
+    for (const court of jurisdictions) {
+      searchPromises.push(
+        this.courtListener.searchOpinions(optimizedQuery, {
+          court,
+          dateAfter: parameters?.dateRange?.start,
+          dateBefore: parameters?.dateRange?.end,
+          order_by: 'dateFiled desc', // Sort by date filed, newest first
+          page_size: 20
+        }).then(results => ({ results, searchType: 'targeted', court }))
+      );
     }
-
-    // Analyze web sources
-    if (webResults.sources?.length > 0) {
-      keyFindings.push({
-        type: 'secondary_authority',
-        summary: `Found ${webResults.sources.length} secondary sources and analyses`,
-        keyPoints: webResults.sources.slice(0, 3).map((source: any) => ({
-          title: source.title,
-          url: source.url
-        }))
-      });
+    
+    // Strategy 2: Broad search with optimized query
+    searchPromises.push(
+      this.courtListener.searchOpinions(optimizedQuery, {
+        order_by: 'dateFiled desc',
+        dateAfter: parameters?.dateRange?.start || '2010-01-01', // Last 15 years for relevance
+        dateBefore: parameters?.dateRange?.end,
+        page_size: 30
+      }).then(results => ({ results, searchType: 'broad' }))
+    );
+    
+    // Strategy 3: Citation-based search if query contains case references
+    const caseReferences = this.extractCaseReferences(query);
+    if (caseReferences.length > 0) {
+      for (const caseRef of caseReferences) {
+        searchPromises.push(
+          this.courtListener.getCitingCases(caseRef, { limit: 20 })
+            .then(results => ({ results, searchType: 'citation', reference: caseRef }))
+        );
+      }
     }
-
-    return {
-      query,
-      keyFindings,
-      executiveSummary: `Research completed on "${query}". Found ${caseResults.cases?.length || 0} cases, ${statuteResults.statutes?.length || 0} statutes, and ${webResults.sources?.length || 0} secondary sources.`,
-      recommendations: this.generateRecommendations(keyFindings),
-      confidence: 'medium',
-      timestamp: new Date().toISOString()
+    
+    // Execute all searches concurrently
+    const searchResults = await Promise.allSettled(searchPromises);
+    
+    // Log search results for debugging
+    let totalCasesFound = 0;
+    let failedSearches = 0;
+    for (const result of searchResults) {
+      if (result.status === 'fulfilled') {
+        totalCasesFound += result.value.results.results?.length || 0;
+      } else {
+        failedSearches++;
+        console.error('❌ Search failed:', result.reason);
+      }
+    }
+    console.log(`📊 Total cases found across all strategies: ${totalCasesFound}`);
+    if (failedSearches > 0) {
+      console.log(`⚠️  ${failedSearches} searches failed`);
+    }
+    
+    // Process results with enhanced extraction
+    for (const result of searchResults) {
+      if (result.status === 'fulfilled') {
+        const { results, searchType } = result.value;
+        const court = 'court' in result.value ? result.value.court : undefined;
+        
+        for (const caseItem of (results.results || []).slice(0, 15)) {
+          // Extract key passages instead of full text for relevance
+          const keyPassages = this.courtListener.extractKeyPassages(caseItem.text || '', query, 2);
+          const relevantContent = keyPassages.length > 0 ? keyPassages.join(' ... ') : (caseItem.text?.substring(0, 1000) || '');
+          
+          allDocs.push(new Document({
+            pageContent: relevantContent,
+            metadata: {
+              type: 'case',
+              title: caseItem.case_name || 'Unknown Case',
+              citation: this.courtListener.formatCitation(caseItem),
+              court: caseItem.court || '',
+              date: caseItem.date_filed || '',
+              url: caseItem.absolute_url ? `https://www.courtlistener.com${caseItem.absolute_url}` : '',
+              relevance: this.calculateCaseRelevance(caseItem, query, searchType, court as string),
+              precedentialStatus: caseItem.precedential_status,
+              searchStrategy: searchType,
+              keyPassages
+            }
+          }));
+        }
+      }
+    }
+  }
+  
+  private determineRelevantJurisdictions(query: string, parameters: Record<string, any> = {}): string[] {
+    // If court specified in parameters, use it
+    if (parameters.court) return [parameters.court];
+    
+    const lowerQuery = query.toLowerCase();
+    const jurisdictions: string[] = [];
+    
+    // Federal courts - high priority for constitutional, federal law issues
+    if (lowerQuery.includes('federal') || lowerQuery.includes('constitutional') || 
+        lowerQuery.includes('supreme court') || lowerQuery.includes('circuit')) {
+      jurisdictions.push('scotus', 'ca1', 'ca2', 'ca3', 'ca4', 'ca5', 'ca6', 'ca7', 'ca8', 'ca9', 'ca10', 'ca11', 'cadc');
+    }
+    
+    // State-specific keywords
+    const stateKeywords = {
+      'texas': ['tex', 'texapp'],
+      'california': ['cal', 'calapp'],
+      'new york': ['ny', 'nyapp'],
+      'florida': ['fla', 'flaapp']
     };
+    
+    for (const [state, courts] of Object.entries(stateKeywords)) {
+      if (lowerQuery.includes(state)) {
+        jurisdictions.push(...courts);
+      }
+    }
+    
+    // Default to major federal and state courts if no specific jurisdiction found
+    if (jurisdictions.length === 0) {
+      jurisdictions.push('scotus', 'ca9', 'ca2', 'cadc'); // Major federal courts
+    }
+    
+    return jurisdictions.slice(0, 5); // Limit to 5 jurisdictions for performance
+  }
+  
+  private extractCaseReferences(query: string): string[] {
+    // Extract potential case IDs or citation patterns
+    const casePatterns = [
+      /\b\d{1,4}\s+U\.?S\.?\s+\d+/gi, // US Reports
+      /\b\d{1,4}\s+F\.?\d*d?\s+\d+/gi, // Federal Reporter
+      /\b\d{1,4}\s+S\.?\s?Ct\.?\s+\d+/gi // Supreme Court Reporter
+    ];
+    
+    const references: string[] = [];
+    for (const pattern of casePatterns) {
+      const matches = query.match(pattern);
+      if (matches) {
+        references.push(...matches);
+      }
+    }
+    
+    return references.slice(0, 3); // Limit citations to search
+  }
+  
+  private calculateCaseRelevance(caseItem: any, query: string, searchType: string, court?: string): number {
+    let relevance = 0.5; // Base relevance
+    
+    // Boost relevance based on search strategy
+    switch (searchType) {
+      case 'targeted':
+        relevance += 0.3; // Higher relevance for targeted jurisdiction searches
+        break;
+      case 'citation':
+        relevance += 0.4; // Highest relevance for citation-based searches
+        break;
+      case 'broad':
+        relevance += 0.1; // Lower relevance for broad searches
+        break;
+    }
+    
+    // Boost for precedential status
+    if (caseItem.precedential_status === 'Published') {
+      relevance += 0.2;
+    } else if (caseItem.precedential_status === 'Unpublished') {
+      relevance -= 0.1;
+    }
+    
+    // Boost for higher courts
+    if (court === 'scotus') relevance += 0.3;
+    else if (court?.startsWith('ca')) relevance += 0.2; // Circuit courts
+    else if (court?.includes('app')) relevance += 0.1; // State appellate courts
+    
+    // Boost for recency (within last 10 years)
+    const caseYear = new Date(caseItem.date_filed).getFullYear();
+    const currentYear = new Date().getFullYear();
+    if (currentYear - caseYear <= 10) {
+      relevance += 0.1;
+    }
+    
+    // Boost for query term matches in case name
+    const queryTerms = query.toLowerCase().split(/\s+/);
+    const caseName = (caseItem.case_name || '').toLowerCase();
+    const nameMatches = queryTerms.filter(term => caseName.includes(term)).length;
+    relevance += (nameMatches / queryTerms.length) * 0.2;
+    
+    return Math.min(relevance, 1.0); // Cap at 1.0
   }
 
-  private generateRecommendations(findings: any[]): string[] {
-    const recommendations = [];
+  private isLegalSource(url: string): boolean {
+    const legalDomains = [
+      'law.cornell.edu',
+      'justia.com',
+      'findlaw.com',
+      'govinfo.gov',
+      'supremecourt.gov',
+      'uscourts.gov',
+      'lexisnexis.com',
+      'westlaw.com',
+      'courtlistener.com',
+      'ssrn.com',
+      'heinonline.org'
+    ];
     
-    if (findings.some(f => f.type === 'case_law')) {
-      recommendations.push('Review the most recent and highest-ranked cases for current legal standards');
-    }
-    
-    if (findings.some(f => f.type === 'statutory')) {
-      recommendations.push('Verify current status of statutes and check for recent amendments');
-    }
-    
-    if (findings.length > 1) {
-      recommendations.push('Cross-reference findings between primary and secondary authorities');
-    }
-    
-    recommendations.push('Consider jurisdiction-specific variations in law');
-    recommendations.push('Check for pending appeals or recent developments');
-    
-    return recommendations;
+    return legalDomains.some(domain => url.includes(domain)) || 
+           url.includes('uscode') || 
+           url.includes('statute') || 
+           url.includes('regulation');
   }
 
-  private async generateResearchReport(synthesis: any, matterId: string | null): Promise<string> {
-    const matter = await this.getMatterInfo(matterId);
+  private isRelevantSource(url: string, query: string): boolean {
+    // Always include legal sources
+    if (this.isLegalSource(url)) return true;
     
+    // Include government and educational sources
+    const relevantDomains = [
+      '.gov',
+      '.edu',
+      'wikipedia.org',
+      'ballotpedia.org',
+      'oyez.org',
+      'law.com',
+      'lawandcrime.com',
+      'reuters.com',
+      'apnews.com',
+      'cnn.com',
+      'politico.com',
+      'npr.org',
+      'pbs.org'
+    ];
+    
+    // Check for relevant domains
+    if (relevantDomains.some(domain => url.includes(domain))) return true;
+    
+    // Include if URL contains legal-related keywords
+    const legalKeywords = ['law', 'legal', 'court', 'judge', 'statute', 'regulation', 'justice', 'criminal', 'penalty', 'sentencing'];
+    const urlLower = url.toLowerCase();
+    if (legalKeywords.some(keyword => urlLower.includes(keyword))) return true;
+    
+    // Include if query terms appear in URL (indicates relevance)
+    const queryTerms = query.toLowerCase().split(/\s+/).filter(term => term.length > 3);
+    if (queryTerms.some(term => urlLower.includes(term))) return true;
+    
+    // Be more lenient - include if content seems relevant
+    return url.includes('death') || url.includes('capital') || url.includes('texas') || 
+           url.includes('aggravating') || url.includes('factors');
+  }
+
+  private async rerankSources(query: string, docs: Document[]): Promise<Document[]> {
+    if (docs.length === 0) return docs;
+    
+    const queryTerms = query.toLowerCase().split(/\s+/);
+    
+    const scoredDocs = docs.map(doc => {
+      let score = 0;
+      
+      // Content relevance scoring
+      const content = (doc.pageContent + ' ' + doc.metadata.title).toLowerCase();
+      const contentMatches = queryTerms.filter(term => content.includes(term)).length;
+      score += (contentMatches / queryTerms.length) * 0.4;
+      
+      // Case-specific relevance factors
+      if (doc.metadata.type === 'case') {
+        // Precedential status weight
+        if (doc.metadata.precedentialStatus === 'Published') score += 0.3;
+        else if (doc.metadata.precedentialStatus === 'Unpublished') score += 0.1;
+        
+        // Court hierarchy weight
+        const court = doc.metadata.court || '';
+        if (court === 'scotus') score += 0.3;
+        else if (court.startsWith('ca')) score += 0.2;
+        else if (court.includes('app')) score += 0.15;
+        
+        // Search strategy weight
+        if (doc.metadata.searchStrategy === 'citation') score += 0.2;
+        else if (doc.metadata.searchStrategy === 'targeted') score += 0.1;
+      }
+      
+      // Base metadata relevance
+      score += (doc.metadata.relevance || 0) * 0.2;
+      
+      // Key passages bonus for cases
+      if (doc.metadata.keyPassages && doc.metadata.keyPassages.length > 0) {
+        score += 0.1;
+      }
+      
+      return { doc, score };
+    });
+    
+    // Sort by score and apply diversity filter
+    const sortedDocs = scoredDocs.sort((a, b) => b.score - a.score);
+    
+    // Ensure good mix of cases and web sources (10 cases + 10 web max)
+    const caseResults: typeof scoredDocs = [];
+    const webResults: typeof scoredDocs = [];
+    const courtCounts: Record<string, number> = {};
+    
+    for (const item of sortedDocs) {
+      if (item.doc.metadata.type === 'case' && caseResults.length < 10) {
+        const court = item.doc.metadata.court || 'unknown';
+        const currentCount = courtCounts[court] || 0;
+        
+        // Limit cases per court to ensure diversity (max 2 per court)
+        if (currentCount < 2) {
+          caseResults.push(item);
+          courtCounts[court] = currentCount + 1;
+        }
+      } else if (item.doc.metadata.type === 'web' && webResults.length < 10) {
+        webResults.push(item);
+      }
+    }
+    
+    // Combine results with cases first (higher priority)
+    const finalResults = [...caseResults, ...webResults];
+    console.log('📊 Final source mix - Cases:', caseResults.length, 'Web:', webResults.length);
+    
+    return finalResults.map(item => item.doc);
+  }
+
+  private createCitations(docs: Document[]): Citation[] {
+    return docs.map((doc, index) => ({
+      id: `source-${index}`,
+      type: doc.metadata.type === 'case' ? 'case' as const : 'web' as const,
+      title: doc.metadata.title || `Source ${index + 1}`, // Ensure title is always defined
+      citation: doc.metadata.citation || undefined,
+      url: doc.metadata.url || undefined,
+      court: doc.metadata.court || undefined,
+      date: doc.metadata.date || undefined,
+      relevance: doc.metadata.relevance || 0.5
+    }));
+  }
+
+  private async getDocumentContext(matterId: string | null, fileIds?: string[]): Promise<string> {
+    let context = '';
+    
+    // Get matter documents
+    if (matterId) {
+      try {
+        const { data: documents } = await supabaseAdmin
+          .from('documents')
+          .select('filename, summary, content')
+          .eq('matter_id', matterId)
+          .limit(5);
+        
+        if (documents?.length) {
+          context += '\n\nRelevant Matter Documents:\n';
+          context += documents.map(d => `${d.filename}: ${d.summary || d.content?.substring(0, 200)}`).join('\n');
+        }
+      } catch (error) {
+        console.error('Failed to load matter documents:', error);
+      }
+    }
+    
+    // Get uploaded file context
+    if (fileIds?.length) {
+      try {
+        for (const fileId of fileIds.slice(0, 3)) {
+          const filePath = path.join(process.cwd(), 'uploads', fileId);
+          const contentPath = filePath + '-extracted.json';
+          
+          if (fs.existsSync(contentPath)) {
+            const content = JSON.parse(fs.readFileSync(contentPath, 'utf8'));
+            context += `\n\nUploaded Document (${content.title}): ${content.contents?.slice(0, 3).join(' ') || ''}`;
+          }
+        }
+      } catch (error) {
+        console.error('Failed to load file context:', error);
+      }
+    }
+    
+    return context;
+  }
+
+  private async generateLegalResponse(query: string, sources: Document[], documentContext: string): Promise<string> {
     if (!this.llm) {
-      return this.generateBasicReport(synthesis, matter);
+      return this.generateBasicResponse(query, sources);
     }
+    
+    const responsePrompt = PromptTemplate.fromTemplate(`
+You are a senior legal research attorney providing comprehensive legal analysis.
 
-    const reportPrompt = PromptTemplate.fromTemplate(`
-Generate a professional legal research memorandum based on the following synthesis.
+User Query: {query}
 
-Matter: {matterName}
-Query: {query}
-Synthesis: {synthesis}
+Relevant Sources:
+{sources}
+{documentContext}
 
-Create a formal legal research memo with:
-1. Header with matter info and date
-2. Executive Summary
-3. Legal Analysis section
-4. Primary Authorities section
-5. Recommendations section
-6. Areas for Additional Research
+Provide a comprehensive legal analysis that:
+1. Directly answers the legal question
+2. Cites specific sources using [1], [2], [3] format (just the number in brackets)
+3. Explains applicable law and precedents
+4. Discusses any jurisdictional variations
+5. Notes areas of legal uncertainty
+6. Provides practical guidance
 
-Use proper legal memo formatting and professional tone.`);
-
+Format your response with clear headings and proper legal analysis structure.
+Always cite sources for every legal statement using [1], [2], [3], etc. (just the number, not "Source").
+`);
+    
     try {
-      const chain = reportPrompt.pipe(this.llm).pipe(this.strParser);
-      const report = await chain.invoke({
-        matterName: matter?.name || 'Unknown Matter',
-        query: synthesis.query,
-        synthesis: JSON.stringify(synthesis, null, 2)
+      const sourcesText = sources.map((doc, index) => 
+        `Source ${index + 1}: ${doc.metadata.title}\n${doc.pageContent.substring(0, 500)}...\n`
+      ).join('\n');
+      
+      const chain = responsePrompt.pipe(this.llm).pipe(this.strParser);
+      const response = await chain.invoke({
+        query,
+        sources: sourcesText,
+        documentContext
       });
       
-      return report + `\n\n---\n*Generated by BenchWise Legal Research Agent*\n*Timestamp: ${synthesis.timestamp}*`;
+      return response;
     } catch (error) {
-      console.error('AI report generation failed:', error);
-      return this.generateBasicReport(synthesis, matter);
+      console.error('AI response generation failed:', error);
+      return this.generateBasicResponse(query, sources);
     }
   }
 
-  private generateBasicReport(synthesis: any, matter: any): string {
-    return `# Legal Research Report
-
-## Matter: ${matter?.name || 'Unknown Matter'}
-**Date:** ${new Date().toLocaleDateString()}
-**Research Query:** ${synthesis.query}
-
-## Executive Summary
-${synthesis.executiveSummary || synthesis.summary}
-
-## Legal Analysis
-${synthesis.legalAnalysis || 'Analysis pending AI integration.'}
-
-## Primary Authorities
-${synthesis.primaryAuthorities?.map((auth: any) => `
-### ${auth.title}
-**Citation:** ${auth.citation}
-**Significance:** ${auth.significance}
-`).join('') || 'No primary authorities identified.'}
-
-## Recommendations
-${synthesis.recommendations?.map((rec: string) => `- ${rec}`).join('\n') || 'No specific recommendations at this time.'}
-
-## Areas for Additional Research
-${synthesis.gaps?.map((gap: string) => `- ${gap}`).join('\n') || 'No research gaps identified.'}
-
----
-*Generated by BenchWise Legal Research Agent*
-*Timestamp: ${synthesis.timestamp}*`;
-  }
-
-  private async storeCasesInDB(cases: any[]): Promise<void> {
-    try {
-      const caseData = cases.map(caseItem => ({
-        case_name: caseItem.case_name,
-        citation: caseItem.citation?.neutral || caseItem.citation?.federal || caseItem.citation?.state,
-        court: caseItem.court,
-        decision_date: caseItem.date_filed,
-        courtlistener_id: caseItem.id.toString(),
-        full_text: caseItem.text || null,
-        metadata: {
-          score: caseItem.score,
-          docket_id: caseItem.docket,
-          absolute_url: caseItem.absolute_url
-        }
-      }));
-
-      await this.supabase
-        .from('case_citations')
-        .upsert(caseData, { onConflict: 'courtlistener_id' });
-    } catch (error) {
-      console.error('Failed to store cases in database:', error);
+  private generateBasicResponse(query: string, sources: Document[]): string {
+    let response = `# Legal Research Analysis\n\n## Query: ${query}\n\n`;
+    
+    if (sources.length === 0) {
+      response += 'No relevant legal sources found for this query.';
+      return response;
     }
+    
+    response += '## Analysis\n\n';
+    response += 'Based on the available legal sources, here are the key findings:\n\n';
+    
+    sources.slice(0, 5).forEach((doc, index) => {
+      response += `**${doc.metadata.title}** [Source ${index + 1}]\n`;
+      response += `${doc.pageContent.substring(0, 200)}...\n\n`;
+    });
+    
+    response += '## Sources Referenced\n\n';
+    sources.forEach((doc, index) => {
+      response += `[Source ${index + 1}] ${doc.metadata.title}`;
+      if (doc.metadata.citation) response += ` - ${doc.metadata.citation}`;
+      if (doc.metadata.url) response += ` (${doc.metadata.url})`;
+      response += '\n';
+    });
+    
+    return response;
   }
 
-  private async optimizeCaseSearchQuery(query: string): Promise<string> {
+  private async optimizeSearchQuery(query: string): Promise<string> {
     if (!this.llm) {
-      return query; // Return original if no AI available
+      // Fallback: basic keyword extraction
+      return this.extractLegalKeywords(query);
     }
-
-    const caseSearchPrompt = PromptTemplate.fromTemplate(`
-Optimize this legal query for case law database search (CourtListener).
-
-Original Query: {query}
-
-Generate an optimized search query that:
-1. Uses legal terminology and concepts
-2. Focuses on key legal issues
-3. Removes unnecessary words
-4. Uses appropriate Boolean operators if needed
-
-Return only the optimized query string.`);
-
+    
     try {
-      const chain = caseSearchPrompt.pipe(this.llm).pipe(this.strParser);
-      const optimized = await chain.invoke({ query });
-      return optimized.trim();
+      const prompt = PromptTemplate.fromTemplate(`
+You are a legal research expert. Convert this natural language question into an optimized search query for case law databases.
+
+User Question: {query}
+
+Instructions:
+1. Extract key legal concepts, terms, and phrases
+2. Include relevant legal keywords that would appear in court opinions
+3. Focus on actionable legal terms rather than conversational language
+4. Include synonyms and related legal terminology
+5. Remove unnecessary words like "find me", "I need", etc.
+6. Keep the query concise but comprehensive
+7. CRITICAL: Do NOT wrap the entire query in quotes. Return just the keywords separated by spaces.
+
+Examples:
+- "Can police search a car without a warrant?" → warrantless vehicle search automobile exception Fourth Amendment
+- "What are the requirements for a valid contract?" → contract formation consideration offer acceptance mutual assent
+- "Death penalty cases in Texas" → capital punishment death penalty Texas execution lethal injection
+
+Return ONLY the optimized search query without quotes, no explanation.
+`);
+      
+      const chain = prompt.pipe(this.llm).pipe(this.strParser);
+      const optimizedQuery = await chain.invoke({ query });
+      
+      // Fallback to original query if optimization fails or is empty
+      return optimizedQuery.trim() || query;
+      
     } catch (error) {
       console.error('Query optimization failed:', error);
-      return query;
+      return this.extractLegalKeywords(query);
     }
   }
 
-  private async optimizeStatutorySearchQuery(query: string): Promise<string> {
-    if (!this.llm) {
-      return `"${query}" statute law code regulation USC CFR`;
-    }
-
-    const statutePrompt = PromptTemplate.fromTemplate(`
-Optimize this query for finding relevant statutes and regulations.
-
-Original Query: {query}
-
-Generate a search query that includes:
-1. Core legal concepts from the query
-2. Relevant statutory terms (statute, code, regulation, USC, CFR)
-3. Appropriate quotation marks for exact phrases
-
-Return only the optimized search string.`);
-
-    try {
-      const chain = statutePrompt.pipe(this.llm).pipe(this.strParser);
-      const optimized = await chain.invoke({ query });
-      return optimized.trim();
-    } catch (error) {
-      console.error('Statutory query optimization failed:', error);
-      return `"${query}" statute law code regulation USC CFR`;
-    }
-  }
-
-  private async optimizeLegalWebSearchQuery(query: string): Promise<string> {
-    if (!this.llm) {
-      return `"${query}" legal analysis law review article`;
-    }
-
-    const webPrompt = PromptTemplate.fromTemplate(`
-Optimize this query for finding legal secondary sources and analyses.
-
-Original Query: {query}
-
-Generate a search query optimized for finding:
-1. Law review articles
-2. Legal analyses
-3. Court commentary
-4. Legal databases (SSRN, HeinOnline, etc.)
-
-Return only the optimized search string.`);
-
-    try {
-      const chain = webPrompt.pipe(this.llm).pipe(this.strParser);
-      const optimized = await chain.invoke({ query });
-      return optimized.trim();
-    } catch (error) {
-      console.error('Web query optimization failed:', error);
-      return `"${query}" legal analysis law review article`;
-    }
-  }
-
-  estimateDuration(input: AgentInput): number {
-    const baseTime = 60; // 1 minute base
-    const complexityFactor = input.query.length > 100 ? 2 : 1;
-    const parameterFactor = Object.keys(input.parameters || {}).length * 0.5;
+  private extractLegalKeywords(query: string): string {
+    // Fallback method for query optimization without LLM
+    const legalTerms = [
+      'constitutional', 'statute', 'precedent', 'holding', 'jurisdiction',
+      'appellant', 'appellee', 'plaintiff', 'defendant', 'liability',
+      'negligence', 'contract', 'tort', 'criminal', 'civil', 'federal',
+      'state', 'supreme court', 'circuit', 'district', 'appeal',
+      'amendment', 'due process', 'equal protection', 'commerce clause',
+      'Miranda', 'search', 'seizure', 'warrant', 'probable cause',
+      'death penalty', 'capital punishment', 'execution', 'sentencing'
+    ];
     
-    return Math.round(baseTime * complexityFactor * (1 + parameterFactor));
-  }
-
-  private generateStatutoryFallback(query: string): any {
-    // Generate relevant statutory guidance based on common queries
-    const lowerQuery = query.toLowerCase();
-    const statutes = [];
-
-    if (lowerQuery.includes('murder') || lowerQuery.includes('homicide')) {
-      statutes.push({
-        title: 'Colorado Revised Statutes § 18-3-102 - Murder in the first degree',
-        url: 'https://law.justia.com/codes/colorado/2016/title-18/article-3/section-18-3-102/',
-        content: 'First degree murder requires premeditation and intent to cause death'
-      });
-      statutes.push({
-        title: 'Colorado Revised Statutes § 18-3-103 - Murder in the second degree', 
-        url: 'https://law.justia.com/codes/colorado/2016/title-18/article-3/section-18-3-103/',
-        content: 'Second degree murder involves knowingly causing death without premeditation'
-      });
-    }
-
-    return {
-      statutes,
-      citations: statutes.map((s, i) => ({
-        id: `fallback-statute-${i}`,
-        type: 'statute' as const,
-        title: s.title,
-        url: s.url,
-        relevance: 0.8
-      })),
-      totalResults: statutes.length,
-      strategy: 'fallback_statutory',
-      note: 'Limited results - external search unavailable'
-    };
-  }
-
-  private generateWebFallback(query: string): any {
-    // Generate relevant web source guidance based on common queries  
-    const lowerQuery = query.toLowerCase();
-    const sources = [];
-
-    if (lowerQuery.includes('murder') || lowerQuery.includes('homicide')) {
-      sources.push({
-        title: 'Understanding Degrees of Murder in Colorado Law',
-        url: 'https://www.shouselaw.com/co/defense/crimes/murder/',
-        content: 'Legal analysis of first and second degree murder distinctions in Colorado'
-      });
-    }
-
-    return {
-      sources,
-      citations: sources.map((s, i) => ({
-        id: `fallback-web-${i}`,
-        type: 'web' as const,
-        title: s.title,
-        url: s.url,
-        relevance: 0.7
-      })),
-      totalResults: sources.length,
-      strategy: 'fallback_web',
-      note: 'Limited results - external search unavailable'
-    };
+    const words = query.toLowerCase().split(/\s+/);
+    const extractedTerms = words.filter(word => 
+      word.length > 3 && !['what', 'when', 'where', 'why', 'how', 'the', 'and', 'or', 'but', 'for', 'with', 'can', 'are', 'is', 'was', 'were', 'find', 'show', 'tell', 'need'].includes(word)
+    );
+    
+    // Add any legal terms found in the query
+    const foundLegalTerms = legalTerms.filter(term => 
+      query.toLowerCase().includes(term.toLowerCase())
+    );
+    
+    return [...new Set([...extractedTerms, ...foundLegalTerms])].join(' ') || query;
   }
 }

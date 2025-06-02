@@ -257,6 +257,82 @@ export class DiscoveryAgent extends BaseAgent {
   }
 
   private async analyzePrivilege(document: any, config: any): Promise<any> {
+    if (!this.llm) {
+      // Fallback to rule-based analysis if LLM not available
+      return this.analyzePrivilegeRuleBased(document, config);
+    }
+
+    try {
+      const privilegePrompt = new PromptTemplate({
+        template: `Analyze the following document for attorney-client privilege and work product protection.
+
+DOCUMENT INFORMATION:
+Filename: {filename}
+Matter: {matterName}
+Client: {clientName}
+
+DOCUMENT TEXT:
+{documentText}
+
+ANALYSIS INSTRUCTIONS:
+1. Determine if this document is protected by attorney-client privilege
+2. Determine if this document qualifies as attorney work product
+3. Identify any potential privilege waivers or risks
+4. Provide confidence level (0-100) for your assessment
+
+Consider these factors:
+- Communications between attorney and client
+- Legal advice being sought or provided
+- Documents prepared in anticipation of litigation
+- Presence of third parties that might waive privilege
+- Attorney work product doctrine protections
+
+RESPONSE FORMAT (JSON):
+{{
+  "isPrivileged": boolean,
+  "privilegeType": "attorney-client" | "work-product" | "none",
+  "confidence": number (0-100),
+  "privilegeBasis": ["reason1", "reason2"],
+  "potentialWaiver": boolean,
+  "waiverRisk": "low" | "medium" | "high",
+  "waiverReason": "explanation if waiver risk exists",
+  "analysis": "detailed explanation of privilege determination",
+  "recommendations": ["action1", "action2"]
+}}`,
+        inputVariables: ['filename', 'matterName', 'clientName', 'documentText']
+      });
+
+      const chain = privilegePrompt.pipe(this.llm).pipe(this.strParser);
+      
+      const response = await chain.invoke({
+        filename: document.filename || 'Unknown',
+        matterName: config.matterName || 'Unknown Matter',
+        clientName: config.clientName || 'Unknown Client',
+        documentText: (document.extracted_text || '').substring(0, 4000) // Limit for token efficiency
+      });
+
+      // Parse LLM response
+      const analysis = JSON.parse(response);
+      
+      return {
+        isPrivileged: analysis.isPrivileged,
+        privilegeType: analysis.privilegeType,
+        basis: analysis.privilegeBasis,
+        confidence: analysis.confidence,
+        potentialWaiver: analysis.potentialWaiver,
+        waiverRisk: analysis.waiverRisk,
+        waiverReason: analysis.waiverReason,
+        aiAnalysis: analysis.analysis,
+        recommendations: analysis.recommendations
+      };
+
+    } catch (error) {
+      console.error('LLM privilege analysis failed, falling back to rule-based:', error);
+      return this.analyzePrivilegeRuleBased(document, config);
+    }
+  }
+
+  private async analyzePrivilegeRuleBased(document: any, config: any): Promise<any> {
     const text = document.extracted_text?.toLowerCase() || '';
     const filename = document.filename?.toLowerCase() || '';
     
@@ -309,7 +385,8 @@ export class DiscoveryAgent extends BaseAgent {
       confidence,
       potentialWaiver,
       waiverRisk: potentialWaiver ? 'medium' : 'low',
-      waiverReason: potentialWaiver ? 'Third party disclosure detected' : null
+      waiverReason: potentialWaiver ? 'Third party disclosure detected' : null,
+      analysisMethod: 'rule-based'
     };
   }
 
@@ -423,6 +500,84 @@ export class DiscoveryAgent extends BaseAgent {
   }
 
   private async analyzeHotDoc(document: any, config: any): Promise<any> {
+    if (!this.llm) {
+      // Fallback to rule-based analysis if LLM not available
+      return this.analyzeHotDocRuleBased(document, config);
+    }
+
+    try {
+      const hotDocPrompt = new PromptTemplate({
+        template: `Analyze the following document to identify potential risks, issues, or "hot" content that could be problematic in litigation.
+
+DOCUMENT INFORMATION:
+Filename: {filename}
+Matter Type: {matterName}
+Date Context: {dateContext}
+
+DOCUMENT TEXT:
+{documentText}
+
+ANALYSIS INSTRUCTIONS:
+Identify content that could be:
+1. Damaging admissions or statements
+2. Evidence of wrongdoing or liability
+3. Contradictory statements or inconsistencies
+4. Communications about destruction of evidence
+5. Statements showing knowledge of problems
+6. Inflammatory or emotional language that could hurt case
+7. Financial irregularities or problems
+8. Regulatory violations or compliance issues
+
+Consider the context of litigation risk and potential damage to the case.
+
+RESPONSE FORMAT (JSON):
+{{
+  "isHot": boolean,
+  "riskLevel": "low" | "medium" | "high" | "critical",
+  "riskScore": number (0-100),
+  "riskCategories": ["category1", "category2"],
+  "keyFindings": ["finding1", "finding2"],
+  "damagingContent": ["quote1", "quote2"],
+  "legalImplications": "explanation of legal risks",
+  "urgencyLevel": "low" | "medium" | "high",
+  "recommendedActions": ["action1", "action2"],
+  "analysisReasoning": "detailed explanation of risk assessment"
+}}`,
+        inputVariables: ['filename', 'matterName', 'dateContext', 'documentText']
+      });
+
+      const chain = hotDocPrompt.pipe(this.llm).pipe(this.strParser);
+      
+      const response = await chain.invoke({
+        filename: document.filename || 'Unknown',
+        matterName: config.matterName || 'Unknown Matter',
+        dateContext: document.created_at || 'Unknown date',
+        documentText: (document.extracted_text || '').substring(0, 4000) // Limit for token efficiency
+      });
+
+      // Parse LLM response
+      const analysis = JSON.parse(response);
+      
+      return {
+        isHot: analysis.isHot,
+        hotScore: analysis.riskScore,
+        riskLevel: analysis.riskLevel,
+        riskFactors: analysis.keyFindings,
+        flaggedTerms: analysis.damagingContent,
+        legalImplications: analysis.legalImplications,
+        urgencyLevel: analysis.urgencyLevel,
+        recommendedActions: analysis.recommendedActions,
+        aiAnalysis: analysis.analysisReasoning,
+        riskCategories: analysis.riskCategories
+      };
+
+    } catch (error) {
+      console.error('LLM hot doc analysis failed, falling back to rule-based:', error);
+      return this.analyzeHotDocRuleBased(document, config);
+    }
+  }
+
+  private async analyzeHotDocRuleBased(document: any, config: any): Promise<any> {
     const text = document.extracted_text?.toLowerCase() || '';
     const filename = document.filename?.toLowerCase() || '';
     
@@ -469,7 +624,8 @@ export class DiscoveryAgent extends BaseAgent {
       hotScore,
       riskFactors,
       riskLevel,
-      flaggedTerms: [...new Set(flaggedTerms)]
+      flaggedTerms: [...new Set(flaggedTerms)],
+      analysisMethod: 'rule-based'
     };
   }
 
@@ -512,7 +668,7 @@ export class DiscoveryAgent extends BaseAgent {
     privilegeResults: any,
     responsivenessResults: any,
     hotDocResults: any,
-    matterId: string
+    matterId: string | null
   ): Promise<string> {
     const matter = await this.getMatterInfo(matterId);
     const stats = this.calculateStatistics(documents, privilegeResults, responsivenessResults);

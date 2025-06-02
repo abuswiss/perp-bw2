@@ -1,6 +1,6 @@
 'use client';
 
-import { Settings as SettingsIcon, ArrowLeft, Loader2 } from 'lucide-react';
+import { Settings as SettingsIcon, ArrowLeft, Loader2, Trash2, AlertTriangle } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { Switch } from '@headlessui/react';
@@ -144,20 +144,31 @@ const Page = () => {
     string | null
   >(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadingStatus, setLoadingStatus] = useState('Loading configuration...');
   const [automaticImageSearch, setAutomaticImageSearch] = useState(false);
   const [automaticVideoSearch, setAutomaticVideoSearch] = useState(false);
   const [systemInstructions, setSystemInstructions] = useState<string>('');
   const [savingStates, setSavingStates] = useState<Record<string, boolean>>({});
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deletingDocuments, setDeletingDocuments] = useState(false);
 
   useEffect(() => {
     const fetchConfig = async () => {
-      const res = await fetch(`/api/config`, {
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      });
+      try {
+        setLoadingStatus('Fetching configuration...');
+        
+        const res = await fetch(`/api/config`, {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
 
-      const data = (await res.json()) as SettingsType;
+        if (!res.ok) {
+          throw new Error(`Failed to fetch config: ${res.status}`);
+        }
+
+        setLoadingStatus('Processing AI models...');
+        const data = (await res.json()) as SettingsType;
       setConfig(data);
 
       const chatModelProvidersKeys = Object.keys(data.chatModelProviders || {});
@@ -209,7 +220,14 @@ const Page = () => {
 
       setSystemInstructions(localStorage.getItem('systemInstructions')!);
 
+      setLoadingStatus('Configuration loaded successfully');
       setIsLoading(false);
+    } catch (error) {
+      console.error('Failed to load configuration:', error);
+      setLoadingStatus('Failed to load configuration. Please refresh the page.');
+      // Still set loading to false so user can see the error message
+      setIsLoading(false);
+    }
     };
 
     fetchConfig();
@@ -378,6 +396,29 @@ const Page = () => {
     }
   };
 
+  const handleDeleteAllDocuments = async () => {
+    setDeletingDocuments(true);
+    try {
+      const response = await fetch('/api/documents/delete-all', {
+        method: 'DELETE',
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to delete documents');
+      }
+
+      const result = await response.json();
+      alert(`Successfully deleted ${result.stats.deletedCount} documents`);
+      setShowDeleteConfirm(false);
+    } catch (error) {
+      console.error('Error deleting documents:', error);
+      alert(error instanceof Error ? error.message : 'Failed to delete documents');
+    } finally {
+      setDeletingDocuments(false);
+    }
+  };
+
   return (
     <div className="max-w-3xl mx-auto">
       <div className="flex flex-col pt-4">
@@ -394,7 +435,7 @@ const Page = () => {
       </div>
 
       {isLoading ? (
-        <div className="flex flex-row items-center justify-center min-h-[50vh]">
+        <div className="flex flex-col items-center justify-center min-h-[50vh] space-y-4">
           <svg
             aria-hidden="true"
             className="w-8 h-8 text-light-200 fill-light-secondary dark:text-[#202020] animate-spin dark:fill-[#ffffff3b]"
@@ -411,6 +452,7 @@ const Page = () => {
               fill="currentFill"
             />
           </svg>
+          <p className="text-black/70 dark:text-white/70 text-sm">{loadingStatus}</p>
         </div>
       ) : (
         config && (
@@ -882,8 +924,91 @@ const Page = () => {
                 </div>
               </div>
             </SettingsSection>
+
+            <SettingsSection title="Developer">
+              <div className="flex flex-col space-y-4">
+                <div className="p-4 bg-red-50 dark:bg-red-900/20 rounded-lg border border-red-200 dark:border-red-800">
+                  <div className="flex items-center gap-3 mb-3">
+                    <AlertTriangle className="w-5 h-5 text-red-600 dark:text-red-400" />
+                    <h4 className="font-semibold text-red-800 dark:text-red-200">Danger Zone</h4>
+                  </div>
+                  
+                  <div className="space-y-3">
+                    <p className="text-sm text-red-700 dark:text-red-300">
+                      The following actions are irreversible and will permanently delete data.
+                    </p>
+                    
+                    <div className="flex items-center justify-between p-3 bg-white dark:bg-gray-800 rounded border border-red-200 dark:border-red-700">
+                      <div>
+                        <p className="font-medium text-black dark:text-white">Delete All Documents</p>
+                        <p className="text-xs text-gray-600 dark:text-gray-400">
+                          Permanently remove all uploaded documents and their embeddings
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => setShowDeleteConfirm(true)}
+                        className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors text-sm font-medium"
+                      >
+                        Delete All
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </SettingsSection>
           </div>
         )
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-md">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="p-3 bg-red-100 dark:bg-red-900 rounded-full">
+                <Trash2 className="w-6 h-6 text-red-600 dark:text-red-400" />
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-black dark:text-white">Delete All Documents</h3>
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  This action cannot be undone
+                </p>
+              </div>
+            </div>
+
+            <div className="mb-6 space-y-3">
+              <p className="text-gray-700 dark:text-gray-300">
+                Are you absolutely sure you want to delete ALL documents? This will:
+              </p>
+              <ul className="list-disc list-inside text-sm text-gray-600 dark:text-gray-400 space-y-1 ml-2">
+                <li>Remove all document records from the database</li>
+                <li>Delete all document files from storage</li>
+                <li>Remove all embeddings and chunks</li>
+                <li>Clear document references from all chats</li>
+              </ul>
+              <p className="text-sm font-medium text-red-600 dark:text-red-400">
+                This operation may take several seconds and cannot be interrupted.
+              </p>
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowDeleteConfirm(false)}
+                disabled={deletingDocuments}
+                className="flex-1 px-4 py-2 bg-gray-300 dark:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-lg hover:bg-gray-400 dark:hover:bg-gray-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteAllDocuments}
+                disabled={deletingDocuments}
+                className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {deletingDocuments ? 'Deleting...' : 'Delete All Documents'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

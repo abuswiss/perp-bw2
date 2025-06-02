@@ -3,6 +3,10 @@ import {
   academicSearchRetrieverPrompt,
 } from './academicSearch';
 import {
+  deepResearchResponsePrompt,
+  deepResearchRetrieverPrompt,
+} from './deepResearch';
+import {
   redditSearchResponsePrompt,
   redditSearchRetrieverPrompt,
 } from './redditSearch';
@@ -18,6 +22,8 @@ export default {
   webSearchRetrieverPrompt,
   academicSearchResponsePrompt,
   academicSearchRetrieverPrompt,
+  deepResearchResponsePrompt,
+  deepResearchRetrieverPrompt,
   redditSearchResponsePrompt,
   redditSearchRetrieverPrompt,
   wolframAlphaSearchResponsePrompt,

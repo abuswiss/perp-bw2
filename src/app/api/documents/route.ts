@@ -3,7 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase/client';
 
 export async function POST(req: NextRequest) {
   try {
-    const { title, content, documentType, matterId } = await req.json();
+    const { title, content, documentType, matterId, metadata } = await req.json();
 
     if (!title || !content) {
       return NextResponse.json(
@@ -12,18 +12,25 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Merge provided metadata with defaults
+    const finalMetadata = {
+      generated_by: 'ai',
+      word_count: content.split(' ').length,
+      ...metadata, // Override with any provided metadata
+    };
+
     const { data, error } = await supabaseAdmin
       .from('documents')
       .insert({
         filename: title,
-        content: content,
+        extracted_text: content,  // Changed from 'content' to 'extracted_text'
         document_type: documentType || 'brief',
         matter_id: matterId || null,
         created_at: new Date().toISOString(),
-        metadata: {
-          generated_by: 'ai',
-          word_count: content.split(' ').length,
-        }
+        metadata: finalMetadata,
+        processing_status: 'completed',  // Mark as completed since we have the text
+        file_type: 'text/plain',  // Default file type for generated documents
+        summary: content.substring(0, 500) + (content.length > 500 ? '...' : '') // Generate summary
       })
       .select()
       .single();

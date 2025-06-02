@@ -16,14 +16,55 @@ import {
   getAvailableEmbeddingModelProviders,
 } from '@/lib/providers';
 
+// Cache to prevent slow reloading
+let cachedConfig: Record<string, any> | null = null;
+let cacheTimestamp = 0;
+const CACHE_TTL = 30000; // 30 seconds cache
+
 export const GET = async (req: Request) => {
   try {
+    // Return cached config if still valid
+    const now = Date.now();
+    if (cachedConfig && (now - cacheTimestamp) < CACHE_TTL) {
+      return Response.json({ ...cachedConfig }, { status: 200 });
+    }
+
     const config: Record<string, any> = {};
 
-    const [chatModelProviders, embeddingModelProviders] = await Promise.all([
-      getAvailableChatModelProviders(),
-      getAvailableEmbeddingModelProviders(),
+    // Use Promise.allSettled to prevent one provider failure from blocking others
+    // Add timeout to prevent hanging on slow network calls
+    const [chatProvidersResult, embeddingProvidersResult] = await Promise.allSettled([
+      Promise.race([
+        getAvailableChatModelProviders(),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Chat providers timeout')), 10000)
+        )
+      ]),
+      Promise.race([
+        getAvailableEmbeddingModelProviders(),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Embedding providers timeout')), 10000)
+        )
+      ])
     ]);
+
+    // Handle chat model providers
+    const chatModelProviders = chatProvidersResult.status === 'fulfilled' 
+      ? chatProvidersResult.value as Record<string, any>
+      : {};
+    
+    // Handle embedding model providers  
+    const embeddingModelProviders = embeddingProvidersResult.status === 'fulfilled'
+      ? embeddingProvidersResult.value as Record<string, any>
+      : {};
+
+    // Log any provider failures for debugging
+    if (chatProvidersResult.status === 'rejected') {
+      console.warn('Chat providers failed to load:', chatProvidersResult.reason);
+    }
+    if (embeddingProvidersResult.status === 'rejected') {
+      console.warn('Embedding providers failed to load:', embeddingProvidersResult.reason);
+    }
 
     config['chatModelProviders'] = {};
     config['embeddingModelProviders'] = {};
@@ -61,6 +102,10 @@ export const GET = async (req: Request) => {
     config['customOpenaiApiKey'] = getCustomOpenaiApiKey();
     config['customOpenaiModelName'] = getCustomOpenaiModelName();
 
+    // Cache the result
+    cachedConfig = config;
+    cacheTimestamp = Date.now();
+
     return Response.json({ ...config }, { status: 200 });
   } catch (err) {
     console.error('An error occurred while getting config:', err);
@@ -73,6 +118,10 @@ export const GET = async (req: Request) => {
 
 export const POST = async (req: Request) => {
   try {
+    // Invalidate cache when config is updated
+    cachedConfig = null;
+    cacheTimestamp = 0;
+    
     const config = await req.json();
 
     const updatedConfig = {

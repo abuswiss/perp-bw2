@@ -3,6 +3,8 @@ import { Message } from './ChatWindow';
 import { useEffect, useState, Fragment } from 'react';
 import { formatTimeDifference } from '@/lib/utils';
 import DeleteChat from './DeleteChat';
+import ChatMatterSelector from './ChatMatterSelector';
+import VisualThemeToggle from './theme/VisualThemeToggle';
 import {
   Popover,
   PopoverButton,
@@ -155,8 +157,7 @@ const Navbar = ({
     }, 1000);
 
     return () => clearInterval(intervalId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [messages]);
 
   return (
     <div className="fixed z-40 top-0 left-0 right-0 px-4 lg:pl-[104px] lg:pr-6 lg:px-8 flex flex-row items-center justify-between w-full py-4 text-sm text-black dark:text-white/70 border-b bg-light-primary dark:bg-dark-primary border-light-100 dark:border-dark-200">
@@ -166,13 +167,17 @@ const Navbar = ({
       >
         <Edit size={17} />
       </a>
-      <div className="hidden lg:flex flex-row items-center justify-center space-x-2">
-        <Clock size={17} />
-        <p className="text-xs">{timeAgo} ago</p>
+      <div className="flex flex-row items-center space-x-4">
+        <ChatMatterSelector />
+        <div className="hidden sm:flex flex-row items-center space-x-2 text-black/50 dark:text-white/50">
+          <Clock size={17} />
+          <p className="text-xs">{timeAgo} ago</p>
+        </div>
       </div>
-      <p className="hidden lg:flex">{title}</p>
+      <p className="hidden lg:flex text-center flex-1">{title}</p>
 
       <div className="flex flex-row items-center space-x-4">
+        <VisualThemeToggle size="sm" className="mr-2" />
         <Popover className="relative">
           <PopoverButton className="active:scale-95 transition duration-100 cursor-pointer p-2 rounded-full hover:bg-light-secondary dark:hover:bg-dark-secondary">
             <Share size={17} />

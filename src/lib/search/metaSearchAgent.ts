@@ -34,7 +34,7 @@ export interface MetaSearchAgentType {
     optimizationMode: 'speed' | 'balanced' | 'quality',
     fileIds: string[],
     systemInstructions: string,
-  ) => Promise<eventEmitter>;
+  ) => eventEmitter;
 }
 
 interface Config {
@@ -45,6 +45,7 @@ interface Config {
   queryGeneratorPrompt: string;
   responsePrompt: string;
   activeEngines: string[];
+  isMultiQuery?: boolean;
 }
 
 type BasicChainInput = {
@@ -55,178 +56,137 @@ type BasicChainInput = {
 class MetaSearchAgent implements MetaSearchAgentType {
   private config: Config;
   private strParser = new StringOutputParser();
+  private lastRetrievedDocs: Document[] = []; // Store documents for source emission
 
   constructor(config: Config) {
     this.config = config;
+    this.config.isMultiQuery = this.config.isMultiQuery || false;
+  }
+
+  private extractPageNumber(content: string): number | undefined {
+    // Try to extract page number from various formats
+    const patterns = [
+      /page\s*(\d+)/i,
+      /p\.\s*(\d+)/i,
+      /(\d+)\s*of\s*\d+/i,
+      /^(\d+)\s*\n/,
+    ];
+    
+    for (const pattern of patterns) {
+      const match = content.match(pattern);
+      if (match && match[1]) {
+        return parseInt(match[1], 10);
+      }
+    }
+    
+    return undefined;
   }
 
   private async createSearchRetrieverChain(llm: BaseChatModel) {
-    (llm as unknown as ChatOpenAI).temperature = 0;
+    if (llm && 'temperature' in llm) {
+      (llm as any).temperature = 0;
+    }
 
     return RunnableSequence.from([
       PromptTemplate.fromTemplate(this.config.queryGeneratorPrompt),
       llm,
       this.strParser,
-      RunnableLambda.from(async (input: string) => {
-        const linksOutputParser = new LineListOutputParser({
-          key: 'links',
-        });
+      RunnableLambda.from(async (llmOutputString: string) => {
+        if (this.config.isMultiQuery) {
+          const individualQueries = llmOutputString
+            .split('\n')
+            .map(q => q.trim())
+            .filter(q => q.length > 0 && !q.toLowerCase().startsWith("rephrased question:"));
 
-        const questionOutputParser = new LineOutputParser({
-          key: 'question',
-        });
+          let allDocs: Document[] = [];
+          const processedUrls = new Set<string>();
 
-        const links = await linksOutputParser.parse(input);
-        let question = this.config.summarizer
-          ? await questionOutputParser.parse(input)
-          : input;
+          console.log('[MetaSearchAgent] Individual queries (isMultiQuery=true):', individualQueries);
 
-        if (question === 'not_needed') {
-          return { query: '', docs: [] };
-        }
+          for (const singleQuery of individualQueries) {
+            console.log(`[MetaSearchAgent] Executing searchSearxng for individual query: "${singleQuery}"`);
+            try {
+              const res = await searchSearxng(singleQuery, {
+                language: 'en',
+                engines: this.config.activeEngines,
+              });
+              console.log(`[MetaSearchAgent] Raw results for query "${singleQuery}":`, JSON.stringify(res.results, null, 2));
 
-        if (links.length > 0) {
-          if (question.length === 0) {
-            question = 'summarize';
+              const documents = res.results
+                .filter(result => result.url && !processedUrls.has(result.url))
+                .map((result) => {
+                  processedUrls.add(result.url!);
+                  return new Document({
+                    pageContent: result.content || (this.config.activeEngines.includes('youtube') ? result.title : ''),
+                    metadata: {
+                      title: result.title,
+                      url: result.url,
+                      ...(result.img_src && { img_src: result.img_src }),
+                    },
+                  });
+                });
+              allDocs = allDocs.concat(documents);
+            } catch (error) {
+              console.error(`[MetaSearchAgent] Error searching for query "${singleQuery}":`, error);
+            }
+          }
+          return { query: llmOutputString, docs: allDocs };
+
+        } else {
+          const linksOutputParser = new LineListOutputParser({ key: 'links' });
+          const questionOutputParser = new LineOutputParser({ key: 'question' });
+          let question = llmOutputString;
+
+          let links: string[] = [];
+          if (llmOutputString.includes("<links>")) {
+            links = await linksOutputParser.parse(llmOutputString);
+          }
+          if (llmOutputString.includes("<question>")) {
+            const questionMatch = llmOutputString.match(/<question>([\s\S]*?)<\/question>/);
+            question = questionMatch && questionMatch[1] ? questionMatch[1].trim() : question;
+          } else if (links.length > 0 && !this.config.summarizer) {
+            let tempQuestion = llmOutputString;
+            links.forEach(link => {
+               tempQuestion = tempQuestion.replace(link, '');
+            });
+            tempQuestion = tempQuestion.replace(/<links>|<\/links>/g, '').trim();
+            if (tempQuestion) question = tempQuestion;
+          }
+          
+          if (question.toLowerCase().trim() === 'not_needed') {
+            return { query: '', docs: [] };
           }
 
-          let docs: Document[] = [];
-
-          const linkDocs = await getDocumentsFromLinks({ links });
-
-          const docGroups: Document[] = [];
-
-          linkDocs.map((doc) => {
-            const URLDocExists = docGroups.find(
-              (d) =>
-                d.metadata.url === doc.metadata.url &&
-                d.metadata.totalDocs < 10,
-            );
-
-            if (!URLDocExists) {
-              docGroups.push({
-                ...doc,
-                metadata: {
-                  ...doc.metadata,
-                  totalDocs: 1,
-                },
-              });
+          if (links.length > 0) {
+            console.log(`[MetaSearchAgent] Processing links (isMultiQuery=false):`, links);
+            console.log(`[MetaSearchAgent] Question associated with links: "${question}"`);
+            const linkDocs = await getDocumentsFromLinks({ links });
+            return { query: question, docs: linkDocs };
+          } else {
+            const finalQuery = question.replace(/<think>.*?<\/think>/g, '').replace(/<question>|<\/question>/g, '').trim();
+            if (!finalQuery) {
+                console.log('[MetaSearchAgent] Final query is empty after stripping tags, returning no docs.');
+                return { query: llmOutputString, docs: [] };
             }
 
-            const docIndex = docGroups.findIndex(
-              (d) =>
-                d.metadata.url === doc.metadata.url &&
-                d.metadata.totalDocs < 10,
+            console.log(`[MetaSearchAgent] Executing searchSearxng with single query (isMultiQuery=false): "${finalQuery}"`);
+            const res = await searchSearxng(finalQuery, {
+              language: 'en',
+              engines: this.config.activeEngines,
+            });
+            console.log(`[MetaSearchAgent] Raw results for single query "${finalQuery}":`, JSON.stringify(res.results, null, 2));
+            const documents = res.results.map(
+              (result) => new Document({
+                  pageContent: result.content || (this.config.activeEngines.includes('youtube') ? result.title : ''),
+                  metadata: {
+                    title: result.title,
+                    url: result.url,
+                    ...(result.img_src && { img_src: result.img_src }),
+                  },
+                }),
             );
-
-            if (docIndex !== -1) {
-              docGroups[docIndex].pageContent =
-                docGroups[docIndex].pageContent + `\n\n` + doc.pageContent;
-              docGroups[docIndex].metadata.totalDocs += 1;
-            }
-          });
-
-          await Promise.all(
-            docGroups.map(async (doc) => {
-              const res = await llm.invoke(`
-            You are a web search summarizer, tasked with summarizing a piece of text retrieved from a web search. Your job is to summarize the 
-            text into a detailed, 2-4 paragraph explanation that captures the main ideas and provides a comprehensive answer to the query.
-            If the query is \"summarize\", you should provide a detailed summary of the text. If the query is a specific question, you should answer it in the summary.
-            
-            - **Journalistic tone**: The summary should sound professional and journalistic, not too casual or vague.
-            - **Thorough and detailed**: Ensure that every key point from the text is captured and that the summary directly answers the query.
-            - **Not too lengthy, but detailed**: The summary should be informative but not excessively long. Focus on providing detailed information in a concise format.
-
-            The text will be shared inside the \`text\` XML tag, and the query inside the \`query\` XML tag.
-
-            <example>
-            1. \`<text>
-            Docker is a set of platform-as-a-service products that use OS-level virtualization to deliver software in packages called containers. 
-            It was first released in 2013 and is developed by Docker, Inc. Docker is designed to make it easier to create, deploy, and run applications 
-            by using containers.
-            </text>
-
-            <query>
-            What is Docker and how does it work?
-            </query>
-
-            Response:
-            Docker is a revolutionary platform-as-a-service product developed by Docker, Inc., that uses container technology to make application 
-            deployment more efficient. It allows developers to package their software with all necessary dependencies, making it easier to run in 
-            any environment. Released in 2013, Docker has transformed the way applications are built, deployed, and managed.
-            \`
-            2. \`<text>
-            The theory of relativity, or simply relativity, encompasses two interrelated theories of Albert Einstein: special relativity and general
-            relativity. However, the word "relativity" is sometimes used in reference to Galilean invariance. The term "theory of relativity" was based
-            on the expression "relative theory" used by Max Planck in 1906. The theory of relativity usually encompasses two interrelated theories by
-            Albert Einstein: special relativity and general relativity. Special relativity applies to all physical phenomena in the absence of gravity.
-            General relativity explains the law of gravitation and its relation to other forces of nature. It applies to the cosmological and astrophysical
-            realm, including astronomy.
-            </text>
-
-            <query>
-            summarize
-            </query>
-
-            Response:
-            The theory of relativity, developed by Albert Einstein, encompasses two main theories: special relativity and general relativity. Special
-            relativity applies to all physical phenomena in the absence of gravity, while general relativity explains the law of gravitation and its
-            relation to other forces of nature. The theory of relativity is based on the concept of "relative theory," as introduced by Max Planck in
-            1906. It is a fundamental theory in physics that has revolutionized our understanding of the universe.
-            \`
-            </example>
-
-            Everything below is the actual data you will be working with. Good luck!
-
-            <query>
-            ${question}
-            </query>
-
-            <text>
-            ${doc.pageContent}
-            </text>
-
-            Make sure to answer the query in the summary.
-          `);
-
-              const document = new Document({
-                pageContent: res.content as string,
-                metadata: {
-                  title: doc.metadata.title,
-                  url: doc.metadata.url,
-                },
-              });
-
-              docs.push(document);
-            }),
-          );
-
-          return { query: question, docs: docs };
-        } else {
-          question = question.replace(/<think>.*?<\/think>/g, '');
-
-          const res = await searchSearxng(question, {
-            language: 'en',
-            engines: this.config.activeEngines,
-          });
-
-          const documents = res.results.map(
-            (result) =>
-              new Document({
-                pageContent:
-                  result.content ||
-                  (this.config.activeEngines.includes('youtube')
-                    ? result.title
-                    : '') /* Todo: Implement transcript grabbing using Youtubei (source: https://www.npmjs.com/package/youtubei) */,
-                metadata: {
-                  title: result.title,
-                  url: result.url,
-                  ...(result.img_src && { img_src: result.img_src }),
-                },
-              }),
-          );
-
-          return { query: question, docs: documents };
+            return { query: finalQuery, docs: documents };
+          }
         }
       }),
     ]);
@@ -239,7 +199,8 @@ class MetaSearchAgent implements MetaSearchAgentType {
     optimizationMode: 'speed' | 'balanced' | 'quality',
     systemInstructions: string,
   ) {
-    return RunnableSequence.from([
+    try {
+      return RunnableSequence.from([
       RunnableMap.from({
         systemInstructions: () => systemInstructions,
         query: (input: BasicChainInput) => input.query,
@@ -274,6 +235,9 @@ class MetaSearchAgent implements MetaSearchAgentType {
             optimizationMode,
           );
 
+          // Store documents for source emission
+          this.lastRetrievedDocs = sortedDocs;
+
           return sortedDocs;
         })
           .withConfig({
@@ -281,16 +245,24 @@ class MetaSearchAgent implements MetaSearchAgentType {
           })
           .pipe(this.processDocs),
       }),
-      ChatPromptTemplate.fromMessages([
-        ['system', this.config.responsePrompt],
-        new MessagesPlaceholder('chat_history'),
-        ['user', '{query}'],
-      ]),
+      PromptTemplate.fromTemplate(`${this.config.responsePrompt}
+
+Chat History: {chat_history}
+User Query: {query}
+Context: {context}
+System Instructions: {systemInstructions}
+Date: {date}
+
+Please provide a comprehensive response based on the above information.`),
       llm,
       this.strParser,
     ]).withConfig({
       runName: 'FinalResponseGenerator',
     });
+    } catch (error) {
+      console.error('❌ Error creating RunnableSequence:', error);
+      throw error;
+    }
   }
 
   private async rerankDocs(
@@ -320,6 +292,11 @@ class MetaSearchAgent implements MetaSearchAgentType {
               fileName: content.title,
               content: c,
               embeddings: embeddings.embeddings[i],
+              fileId: file,
+              chunkIndex: i,
+              // Try to extract page number from content (e.g., "Page 2 of 5")
+              pageNumber: this.extractPageNumber(c),
+              uploadDate: content.metadata?.uploadDate,
             };
           },
         );
@@ -347,7 +324,12 @@ class MetaSearchAgent implements MetaSearchAgentType {
             pageContent: fileData.content,
             metadata: {
               title: fileData.fileName,
-              url: `File`,
+              url: `file://${fileData.fileId}`,
+              documentId: fileData.fileId,
+              chunkIndex: fileData.chunkIndex,
+              pageNumber: fileData.pageNumber,
+              type: 'document',
+              date: fileData.uploadDate,
             },
           });
         });
@@ -393,7 +375,12 @@ class MetaSearchAgent implements MetaSearchAgentType {
             pageContent: fileData.content,
             metadata: {
               title: fileData.fileName,
-              url: `File`,
+              url: `file://${fileData.fileId}`,
+              documentId: fileData.fileId,
+              chunkIndex: fileData.chunkIndex,
+              pageNumber: fileData.pageNumber,
+              type: 'document',
+              date: fileData.uploadDate,
             },
           });
         }),
@@ -440,10 +427,10 @@ class MetaSearchAgent implements MetaSearchAgentType {
         event.event === 'on_chain_end' &&
         event.name === 'FinalSourceRetriever'
       ) {
-        ``;
+        console.log('[MetaSearchAgent] Emitting sources:', JSON.stringify(this.lastRetrievedDocs, null, 2));
         emitter.emit(
           'data',
-          JSON.stringify({ type: 'sources', data: event.data.output }),
+          JSON.stringify({ type: 'sources', data: this.lastRetrievedDocs }),
         );
       }
       if (
@@ -464,7 +451,7 @@ class MetaSearchAgent implements MetaSearchAgentType {
     }
   }
 
-  async searchAndAnswer(
+  searchAndAnswer(
     message: string,
     history: BaseMessage[],
     llm: BaseChatModel,
@@ -475,25 +462,29 @@ class MetaSearchAgent implements MetaSearchAgentType {
   ) {
     const emitter = new eventEmitter();
 
-    const answeringChain = await this.createAnsweringChain(
+    // Initialize the answering chain and start streaming in the background
+    this.createAnsweringChain(
       llm,
       fileIds,
       embeddings,
       optimizationMode,
       systemInstructions,
-    );
+    ).then(answeringChain => {
+      const stream = answeringChain.streamEvents(
+        {
+          chat_history: history,
+          query: message,
+        },
+        {
+          version: 'v1',
+        },
+      );
 
-    const stream = answeringChain.streamEvents(
-      {
-        chat_history: history,
-        query: message,
-      },
-      {
-        version: 'v1',
-      },
-    );
-
-    this.handleStream(stream, emitter);
+      this.handleStream(stream, emitter);
+    }).catch(error => {
+      console.error('Error creating answering chain:', error);
+      emitter.emit('error', error);
+    });
 
     return emitter;
   }

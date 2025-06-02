@@ -51,7 +51,7 @@ export interface AgentTask {
 
 export interface LegalAgent {
   id: string;
-  type: 'research' | 'writing' | 'analysis' | 'review' | 'discovery';
+  type: 'research' | 'writing' | 'analysis' | 'review' | 'discovery' | 'deepResearch';
   name: string;
   description: string;
   capabilities: AgentCapability[];

@@ -1,18 +1,251 @@
-use_default_settings: true
+# SearxNG Configuration Optimized for Legal Research
+# Based on comprehensive config but with only legal-relevant engines enabled
 
 general:
-  instance_name: 'searxng'
+  debug: false
+  instance_name: "BenchWise Legal Search"
+  privacypolicy_url: false
+  donation_url: false
+  contact_url: false
+  enable_metrics: true
+  open_metrics: ''
 
 search:
-  autocomplete: 'google'
-  default_lang: 'en'
+  safe_search: 0
+  autocomplete: "google"
+  autocomplete_min: 4
+  favicon_resolver: ""
+  default_lang: "en"
+  ban_time_on_fail: 5
+  max_ban_time_on_fail: 120
+  suspended_times:
+    SearxEngineAccessDenied: 86400
+    SearxEngineCaptcha: 86400
+    SearxEngineTooManyRequests: 3600
+    cf_SearxEngineCaptcha: 1296000
+    cf_SearxEngineAccessDenied: 86400
+    recaptcha_SearxEngineCaptcha: 604800
   formats:
     - html
     - json
 
 server:
-  secret_key: 'a2fb23f1b02e6ee83875b09826990de0f6bd908b6638e8c10277d415f6ab852b' # Is overwritten by ${SEARXNG_SECRET}
+  port: 8080
+  bind_address: "0.0.0.0"
+  base_url: false
+  limiter: false
+  public_instance: false
+  secret_key: "ultrasecretkey"
+  image_proxy: false
+  method: "GET"
 
+# UI Configuration
+ui:
+  static_use_hash: false
+  infinite_scroll: false
+  default_theme: simple
+  center_alignment: false
+  cache_url: https://web.archive.org/web/
+  query_in_title: false
+  hotkeys: help
+
+# Redis Configuration
+redis:
+  url: false
+
+# Enabled Engines for Legal Research
 engines:
-  - name: wolframalpha
+  # Academic and Research Engines
+  - name: arxiv
+    engine: arxiv
     disabled: false
+    shortcut: arx
+    categories: ["science", "academic"]
+    timeout: 8.0
+    
+  - name: google scholar
+    engine: google_scholar
+    disabled: false
+    shortcut: gs
+    categories: ["science", "academic"]
+    
+  - name: pubmed
+    engine: pubmed
+    disabled: false
+    shortcut: pub
+    categories: ["science", "academic"]
+    timeout: 5.0
+    
+  - name: crossref
+    engine: json_engine
+    disabled: false
+    shortcut: cr
+    categories: ["science", "academic"]
+    paging: true
+    search_url: https://api.crossref.org/works?query={query}&rows=20&offset={offset}
+    results_query: message.items
+    url_query: DOI
+    title_query: title
+    content_query: abstract
+    timeout: 10.0
+    
+  - name: semantic scholar
+    engine: semantic_scholar
+    disabled: false
+    shortcut: se
+    categories: ["science", "academic"]
+    timeout: 10.0
+
+  # General Search Engines
+  - name: google
+    engine: google
+    disabled: false
+    shortcut: go
+    categories: ["general", "web"]
+    
+  - name: bing
+    engine: bing
+    disabled: false
+    shortcut: bi
+    categories: ["general", "web"]
+    
+  - name: duckduckgo
+    engine: duckduckgo
+    disabled: false
+    shortcut: ddg
+    categories: ["general", "web"]
+    
+  - name: brave
+    engine: brave
+    disabled: false
+    shortcut: br
+    categories: ["general", "web"]
+    
+  - name: startpage
+    engine: startpage
+    disabled: false
+    shortcut: sp
+    categories: ["general", "web"]
+    
+  # News Engines (for legal developments)
+  - name: google news
+    engine: google_news
+    disabled: false
+    shortcut: gon
+    categories: ["news"]
+    
+  - name: bing news
+    engine: bing_news
+    disabled: false
+    shortcut: bin
+    categories: ["news"]
+    
+  - name: yahoo news
+    engine: yahoo_news
+    disabled: false
+    shortcut: yhn
+    categories: ["news"]
+    
+  # Reference Engines
+  - name: wikipedia
+    engine: wikipedia
+    disabled: false
+    shortcut: wp
+    categories: ["general", "reference"]
+    
+  - name: wikidata
+    engine: wikidata
+    disabled: false
+    shortcut: wd
+    categories: ["general", "reference"]
+    
+  # Special Purpose
+  - name: wolframalpha
+    engine: wolframalpha_api
+    disabled: false
+    shortcut: wa
+    categories: ["science"]
+    api_key: '5952JQ-X52L3VKWT8'
+    timeout: 10.0
+    
+  # Image Search (for evidence, diagrams)
+  - name: google images
+    engine: google_images
+    disabled: false
+    shortcut: goi
+    categories: ["images", "web"]
+    
+  - name: bing images
+    engine: bing_images
+    disabled: false
+    shortcut: bii
+    categories: ["images"]
+    
+  # Video Search (for depositions, hearings)
+  - name: youtube
+    engine: youtube_noapi
+    disabled: false
+    shortcut: yt
+    categories: ["videos", "music"]
+    
+  # Social Media (for investigations)
+  - name: reddit
+    engine: reddit
+    disabled: false
+    shortcut: re
+    categories: ["social media"]
+    page_size: 25
+
+  # All other engines are disabled by default
+  # Technical engines (GitHub, StackOverflow, npm, etc.) are not included
+  # Entertainment engines are not included
+  # Shopping engines are not included
+
+# Disabled/not included engine categories:
+# - IT/Technical (github, gitlab, stackoverflow, npm, pypi, etc.)
+# - Entertainment (movies, music streaming, games)
+# - Shopping (amazon, ebay, etc.)
+# - Adult content
+# - Torrents
+# - Cryptocurrency
+
+# Outgoing request configuration
+outgoing:
+  request_timeout: 10.0
+  max_request_timeout: 15.0
+  pool_connections: 100
+  pool_maxsize: 20
+  enable_http2: true
+
+# Result Processors
+result_processors:
+  - 'hostname_replace'
+  - 'html_to_text'
+
+# Categories
+categories_as_tabs:
+  general:
+    - name: general
+      icon: search
+  images:
+    - name: images
+      icon: images
+  videos:
+    - name: videos
+      icon: videos
+  news:
+    - name: news
+      icon: newspaper-o
+  science:
+    - name: science
+      icon: book
+  social:
+    - name: social media
+      icon: users
+
+# Enable plugins
+enabled_plugins:
+  - 'Hash plugin'
+  - 'Self Information'
+  - 'Tracker URL remover'
+  - 'Unit converter plugin'

@@ -18,8 +18,36 @@ function formatAgentResponse(agentType: string, data: any): { response: string; 
 
   switch (agentType) {
     case 'legalResearch':
-      // Handle new structured format from AI synthesis
-      if (data?.synthesis && typeof data.synthesis === 'object') {
+      // Handle new simplified format with direct response
+      if (data?.response && typeof data.response === 'string') {
+        response = data.response;
+        
+        // Add sources from the simplified format
+        console.log('📊 Total sources found:', data.sources?.length || 0);
+        if (data.sources && Array.isArray(data.sources)) {
+          console.log('📄 First few sources:', data.sources.slice(0, 3).map((s: any) => ({ 
+            title: s.metadata?.title || s.title, 
+            type: s.metadata?.type || 'unknown',
+            url: s.metadata?.url || s.url 
+          })));
+          
+          data.sources.forEach((source: any) => {
+            const sourceData = {
+              title: source.metadata?.title || source.title || 'Unknown Source',
+              url: source.metadata?.url || source.url || '',
+              citation: source.metadata?.citation || source.citation || '',
+              court: source.metadata?.court || source.court || '',
+              date: source.metadata?.date || source.date || '',
+              type: source.metadata?.type || 'web',
+              case_name: source.metadata?.title || source.title, // For legal case compatibility
+              precedential_status: source.metadata?.precedentialStatus
+            };
+            sources.push(sourceData);
+          });
+        }
+      }
+      // Fallback: Handle old complex format from AI synthesis
+      else if (data?.synthesis && typeof data.synthesis === 'object') {
         const synthesis = data.synthesis;
         
         // Executive Summary
@@ -75,7 +103,7 @@ function formatAgentResponse(agentType: string, data: any): { response: string; 
           response += '\n';
         }
         
-        if (synthesis.recommendations && synthesis.recommendations.length > 0) {
+        if (synthesis.recommendations && Array.isArray(synthesis.recommendations) && synthesis.recommendations.length > 0) {
           response += `## Recommendations\n\n`;
           synthesis.recommendations.forEach((rec: string) => {
             response += `- ${rec}\n`;
@@ -90,8 +118,8 @@ function formatAgentResponse(agentType: string, data: any): { response: string; 
             let url = caseItem.absolute_url || caseItem.url || '';
             if (url && !url.startsWith('http')) {
               url = `https://www.courtlistener.com${url}`;
-            } else if (!url && caseItem.id) {
-              url = `https://www.courtlistener.com/opinion/${caseItem.id}/`;
+            } else if (!url) {
+              url = ''; // Don't construct URL if we don't have absolute_url
             }
             
             sources.push({
@@ -131,8 +159,8 @@ function formatAgentResponse(agentType: string, data: any): { response: string; 
             let url = caseItem.url || '';
             if (url && !url.startsWith('http')) {
               url = `https://www.courtlistener.com${url}`;
-            } else if (!url && caseItem.id) {
-              url = `https://www.courtlistener.com/opinion/${caseItem.id}/`;
+            } else if (!url) {
+              url = ''; // Don't construct URL if we don't have absolute_url
             }
             
             sources.push({
@@ -196,25 +224,133 @@ function formatAgentResponse(agentType: string, data: any): { response: string; 
       break;
 
     case 'contractAnalysis':
-      if (data?.keyTerms) {
-        response += '## Key Contract Terms\n\n';
-        data.keyTerms.forEach((term: any) => {
-          response += `- **${term.name}**: ${term.description}\n`;
-        });
+      if (data?.analysis) {
+        response = data.analysis;
+      } else if (data?.result?.analysis) {
+        response = data.result.analysis;
+      } else {
+        response = JSON.stringify(data, null, 2);
       }
-      if (data?.risks) {
-        response += '\n## Identified Risks\n\n';
-        data.risks.forEach((risk: any) => {
-          response += `- **${risk.type}** (${risk.severity}): ${risk.description}\n`;
-        });
-      }
-      if (data?.recommendations) {
-        response += '\n## Recommendations\n\n';
-        data.recommendations.forEach((rec: string) => {
-          response += `- ${rec}\n`;
-        });
+      
+      if (data?.documentInfo || data?.result?.documentInfo) {
+        const docInfo = data?.documentInfo || data?.result?.documentInfo;
+        response += `\n\n---\n_Document: ${docInfo.filename} (${docInfo.wordCount} words)_`;
       }
       break;
+
+    case 'legalTimeline':
+      if (data?.timeline) {
+        const timeline = data.timeline;
+        
+        // Create a more visually appealing timeline response
+        // Executive Summary in a card format
+        response += `## 📊 Executive Summary\n\n`;
+        response += `| Aspect | Details |\n`;
+        response += `|--------|----------|\n`;
+        response += `| **Case Type** | ${timeline.summary.caseType} |\n`;
+        response += `| **Duration** | ${timeline.summary.estimatedDuration} |\n`;
+        response += `| **Cost Range** | ${timeline.summary.totalCostRange} |\n`;
+        response += `| **Assessment** | ${timeline.summary.strengthAssessment} |\n`;
+        response += `| **Recommendation** | ${timeline.summary.primaryRecommendation} |\n\n`;
+        
+        // Timeline Phases with visual indicators
+        response += `## ⏱️ Litigation Timeline\n\n`;
+        timeline.phases.forEach((phase: any, index: number) => {
+          const progressBar = '▓'.repeat(Math.min(10, Math.round(phase.settlementProbability * 10)));
+          const emptyBar = '░'.repeat(10 - progressBar.length);
+          
+          response += `### ${index + 1}. ${phase.name}\n\n`;
+          response += `**⏰ Duration:** ${phase.duration.typical} ${phase.duration.unit}  \n`;
+          response += `**💰 Cost:** $${phase.costRange.min.toLocaleString()} - $${phase.costRange.max.toLocaleString()}  \n`;
+          response += `**🤝 Settlement Probability:** ${Math.round(phase.settlementProbability * 100)}% ${progressBar}${emptyBar}\n\n`;
+          response += `${phase.description}\n\n`;
+          
+          if (phase.keyActions.length > 0) {
+            response += `**🎯 Key Actions:**\n`;
+            phase.keyActions.forEach((action: any) => {
+              response += `- ✅ **${action.title}:** ${action.description}\n`;
+            });
+            response += '\n';
+          }
+          
+          response += '---\n\n';
+        });
+        
+        // Next Steps with priority indicators
+        if (timeline.nextSteps?.immediate.length > 0) {
+          response += `## 🚀 Immediate Next Steps\n\n`;
+          timeline.nextSteps.immediate.forEach((action: any, index: number) => {
+            const priorityIcon = action.priority === 'immediate' ? '🔴' : 
+                               action.priority === 'short_term' ? '🟡' : '🟢';
+            response += `${index + 1}. ${priorityIcon} **${action.title}**  \n`;
+            response += `   ${action.description}\n\n`;
+          });
+        }
+        
+        // Alternative Options with icons
+        if (timeline.alternativeDisputes?.length > 0) {
+          response += `## ⚖️ Alternative Resolution Options\n\n`;
+          timeline.alternativeDisputes.forEach((option: any) => {
+            const typeIcon = option.type === 'mediation' ? '🤝' : 
+                           option.type === 'arbitration' ? '⚖️' : '💬';
+            response += `### ${typeIcon} ${option.type.charAt(0).toUpperCase() + option.type.slice(1)}\n`;
+            response += `- **Description:** ${option.description}\n`;
+            response += `- **Cost:** ${option.estimatedCost}\n`;
+            response += `- **Duration:** ${option.estimatedDuration}\n`;
+            response += `- **Success Rate:** ${Math.round(option.successRate * 100)}%\n\n`;
+          });
+        }
+        
+        // Critical Deadlines with warning styling
+        if (timeline.criticalDeadlines?.length > 0) {
+          response += `## ⚠️ Critical Deadlines\n\n`;
+          response += `> **⏰ Time-sensitive actions requiring immediate attention:**\n\n`;
+          timeline.criticalDeadlines.forEach((deadline: any) => {
+            if (deadline.isCritical) {
+              const urgency = deadline.daysFromNow <= 30 ? '🔴 URGENT' : 
+                            deadline.daysFromNow <= 90 ? '🟡 IMPORTANT' : '🟢 UPCOMING';
+              response += `- ${urgency} **${deadline.description}:** ${deadline.daysFromNow} days remaining\n`;
+            }
+          });
+          response += '\n';
+        }
+        
+        response += `---\n\n`;
+        response += `*💡 This timeline is customized based on your case type, complexity, and jurisdiction. Actual timelines may vary depending on court schedules, case developments, and settlement opportunities.*`;
+        
+      } else {
+        response = '⚖️ **Timeline Analysis Complete** - A comprehensive litigation timeline has been generated based on your case description.';
+      }
+      break;
+
+    case 'documentAnalysis':
+      // Handle document analysis agent response
+      if (typeof data === 'string') {
+        // Check if it's the special interactive format
+        if (data.includes('||DOC_DATA_START||')) {
+          response = data; // Pass through the special format
+        } else {
+          response = data;
+        }
+      } else if (data?.analysis) {
+        response = data.analysis;
+        
+        // Add document info if available
+        if (data.documentInfo) {
+          response += `\n\n---\n**Document:** ${data.documentInfo.filename}\n`;
+          response += `**Type:** ${data.documentInfo.type || 'Legal Document'}\n`;
+          response += `**Word Count:** ${data.documentInfo.wordCount?.toLocaleString() || 'Unknown'}\n`;
+        }
+        
+        // Add highlights info if available
+        if (data.highlights && data.highlights.length > 0) {
+          response += `\n**Highlights:** ${data.highlights.length} reference${data.highlights.length !== 1 ? 's' : ''} identified\n`;
+        }
+      } else {
+        response = '📄 **Document Analysis Complete** - The document has been analyzed successfully.';
+      }
+      break;
+
 
     default:
       response = JSON.stringify(data, null, 2);
@@ -312,10 +448,10 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    let result: { response: string; sources: any[] };
+    let result: { response: string; sources: any[]; taskId?: string; legalTask?: any; orchestrator?: any; emitter?: any };
     
     // Check if this is a legal focus mode (uses LegalOrchestrator)
-    const legalModes = ['legalResearch', 'briefWriting', 'discovery', 'contractAnalysis'];
+    const legalModes = ['legalResearch', 'briefWriting', 'discovery', 'contractAnalysis', 'legalTimeline', 'documentAnalysis'];
     console.log('🤖 Focus mode:', focusMode, 'Is legal?', legalModes.includes(focusMode));
     
     if (legalModes.includes(focusMode)) {
@@ -362,7 +498,9 @@ export async function POST(req: NextRequest) {
         'legalResearch': 'research',
         'briefWriting': 'brief-writing',
         'discovery': 'discovery',
-        'contractAnalysis': 'contract'
+        'contractAnalysis': 'contract',
+        'legalTimeline': 'timeline',
+        'documentAnalysis': 'document-analysis'
       };
       
       const agentType = agentTypeMap[focusMode];
@@ -391,32 +529,88 @@ export async function POST(req: NextRequest) {
     } else {
       // Handle non-legal focus modes
       console.log('🔍 Using general search for mode:', focusMode);
+      console.log('📋 Available search handlers:', Object.keys(searchHandlers));
       
       const handler = searchHandlers[focusMode];
       if (!handler) {
-        throw new Error(`Invalid focus mode: ${focusMode}`);
+        console.error('❌ No handler found for focus mode:', focusMode);
+        throw new Error(`Invalid focus mode: ${focusMode}. Available modes: ${Object.keys(searchHandlers).join(', ')}`);
       }
       
-      // Stream directly from the emitter instead of collecting first
-      result = { 
-        response: '', 
-        sources: [], 
-        emitter: await handler.searchAndAnswer(
+      console.log('✅ Found handler for focus mode:', focusMode);
+      
+      try {
+        // Convert chat model config to actual LLM instance
+        const { getDefaultChatModel, getDeepResearchChatModel } = await import('@/lib/providers');
+        const { OpenAIEmbeddings } = await import('@langchain/openai');
+        
+        // Use specific model for deep legal research
+        const llm = focusMode === 'deepLegalResearch' 
+          ? await getDeepResearchChatModel()
+          : await getDefaultChatModel();
+        if (!llm) {
+          throw new Error('Failed to initialize chat model');
+        }
+        
+        // Use the configured embedding model from the request
+        const { getAvailableEmbeddingModelProviders } = await import('@/lib/providers');
+        const { createStandardizedEmbeddings } = await import('@/lib/embeddings/standardizedEmbeddings');
+        
+        const embeddingProvider = embeddingModel?.provider || 'openai';
+        const embeddingModelName = embeddingModel?.name || 'text-embedding-3-small';
+        
+        // Get embeddings with proper API key configuration
+        let embeddings;
+        try {
+          // Get available providers to check API keys
+          const availableProviders = await getAvailableEmbeddingModelProviders();
+          
+          if (embeddingProvider === 'openai' && availableProviders.openai) {
+            const { OpenAIEmbeddings } = await import('@langchain/openai');
+            embeddings = new OpenAIEmbeddings({
+              modelName: embeddingModelName,
+            });
+          } else if (embeddingProvider === 'transformers') {
+            const { HuggingFaceTransformersEmbeddings } = await import('@langchain/community/embeddings/hf_transformers');
+            embeddings = new HuggingFaceTransformersEmbeddings({
+              modelName: embeddingModelName,
+            });
+          } else {
+            // Default to OpenAI embeddings
+            const { OpenAIEmbeddings } = await import('@langchain/openai');
+            embeddings = new OpenAIEmbeddings();
+          }
+        } catch (error) {
+          console.error('Failed to create embeddings:', error);
+          throw new Error('Failed to initialize embeddings model');
+        }
+        
+        // Get emitter directly (not awaited)
+        const emitter = handler.searchAndAnswer(
           message.content,
           history.map(([role, content]) => 
             role === 'human' 
               ? new HumanMessage({ content })
               : new AIMessage({ content })
           ),
-          chatModel,
-          embeddingModel,
+          llm,
+          embeddings as any,
           optimizationMode,
           files,
           systemInstructions || ''
-        )
-      };
-      
-      console.log('✅ General search completed');
+        );
+        
+        result = { 
+          response: '', 
+          sources: [], 
+          emitter: emitter
+        };
+        
+        console.log('✅ General search emitter created successfully');
+      } catch (searchError) {
+        console.error('❌ Error creating search emitter:', searchError);
+        throw new Error(`Failed to create search emitter for ${focusMode}: ${searchError instanceof Error ? searchError.message : 'Unknown error'}`);
+      }
     }
 
     // Generate AI message ID
@@ -467,27 +661,35 @@ export async function POST(req: NextRequest) {
           const executionPromise = orchestrator.executeTask(task.id);
           
           // Poll for progress updates
+          let pollingActive = true;
           const pollProgress = async () => {
-            while (true) {
+            while (pollingActive) {
               try {
                 const taskStatus = await orchestrator.taskQueue.getTask(task.id);
-                if (!taskStatus) break;
+                if (!taskStatus || !pollingActive) break;
                 
-                // Send progress updates
-                if (taskStatus.progress > 0) {
-                  controller.enqueue(
-                    encoder.encode(
-                      JSON.stringify({ 
-                        type: 'progress', 
-                        data: taskStatus.current_step || `Progress: ${taskStatus.progress}%`,
-                        messageId: aiMessageId 
-                      }) + '\n'
-                    )
-                  );
+                // Send progress updates only if controller is still open
+                if (taskStatus.progress > 0 && pollingActive) {
+                  try {
+                    controller.enqueue(
+                      encoder.encode(
+                        JSON.stringify({ 
+                          type: 'progress', 
+                          data: taskStatus.current_step || `Progress: ${taskStatus.progress}%`,
+                          messageId: aiMessageId 
+                        }) + '\n'
+                      )
+                    );
+                  } catch (controllerError) {
+                    // Controller is closed, stop polling
+                    pollingActive = false;
+                    break;
+                  }
                 }
                 
                 // Check if task is complete
                 if (taskStatus.status === 'completed' || taskStatus.status === 'failed') {
+                  pollingActive = false;
                   break;
                 }
                 
@@ -495,6 +697,7 @@ export async function POST(req: NextRequest) {
                 await new Promise(resolve => setTimeout(resolve, 500));
               } catch (error) {
                 console.error('Error polling progress:', error);
+                pollingActive = false;
                 break;
               }
             }
@@ -505,6 +708,9 @@ export async function POST(req: NextRequest) {
           
           // Wait for execution to complete
           const agentResult = await executionPromise;
+          
+          // Stop polling once task is complete
+          pollingActive = false;
           
           if (!agentResult.success) {
             controller.error(new Error(agentResult.error || 'Agent execution failed'));
@@ -556,6 +762,21 @@ export async function POST(req: NextRequest) {
           
         } else if (result.emitter) {
           const emitter = result.emitter;
+          
+          // Add timeout for emitter operations
+          const emitterTimeout = setTimeout(() => {
+            console.error('⏰ Emitter timeout - search took too long');
+            controller.enqueue(
+              encoder.encode(
+                JSON.stringify({ 
+                  type: 'error', 
+                  data: 'Search timeout - please try again',
+                  messageId: aiMessageId 
+                }) + '\n'
+              )
+            );
+            controller.close();
+          }, 60000); // 1 minute timeout
           
           // Send initial progress
           controller.enqueue(
@@ -613,6 +834,7 @@ export async function POST(req: NextRequest) {
           });
           
           emitter.on('end', () => {
+            clearTimeout(emitterTimeout);
             controller.enqueue(
               encoder.encode(
                 JSON.stringify({ 
@@ -625,6 +847,7 @@ export async function POST(req: NextRequest) {
           });
           
           emitter.on('error', (error: any) => {
+            clearTimeout(emitterTimeout);
             console.error('Emitter error:', error);
             controller.error(error);
           });

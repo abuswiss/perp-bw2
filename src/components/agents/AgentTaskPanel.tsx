@@ -100,7 +100,7 @@ export default function AgentTaskPanel() {
   const getTaskTypeDisplay = (agentType: string) => {
     const types = {
       'research': 'Legal Research',
-      'brief-writing': 'Brief Writing',
+      'brief-writing': 'Document Drafting',
       'discovery': 'Discovery Review',
       'contract': 'Contract Analysis'
     };

@@ -19,6 +19,7 @@ export const loadOllamaChatModels = async () => {
       headers: {
         'Content-Type': 'application/json',
       },
+      timeout: 5000, // 5 second timeout
     });
 
     const { models } = res.data;
@@ -54,6 +55,7 @@ export const loadOllamaEmbeddingModels = async () => {
       headers: {
         'Content-Type': 'application/json',
       },
+      timeout: 5000, // 5 second timeout
     });
 
     const { models } = res.data;

@@ -29,9 +29,15 @@ Consider:
 4. Procedural vs substantive issues
 5. Related causes of action
 
+IMPORTANT: 
+- DO NOT wrap the entire query in quotes
+- You may use quotes for specific phrases like "death penalty" or "aggravating factors"
+- Keep queries focused and relevant
+- Avoid overly long queries (max 10-12 keywords)
+
 Current question: {query}
 
-Generate 3-5 specific search queries for case law research:
+Generate 3-5 specific search queries for case law research, one per line:
 `;
 
 const legalSearchRetrieverPrompt = `
@@ -134,10 +140,22 @@ const createLegalSearchChain = (llm: BaseChatModel, embeddings: Embeddings) => {
         const allResults: Document[] = [];
         
         // Search CourtListener for each query
-        for (const query of input.searchQueries) {
+        for (let query of input.searchQueries) {
           try {
+            // Clean up the query - remove quotes if they wrap the entire query
+            query = query.trim();
+            if (query.startsWith('"') && query.endsWith('"') && query.length > 2) {
+              // Check if there are no other quotes in the middle
+              const innerQuery = query.slice(1, -1);
+              if (!innerQuery.includes('"')) {
+                query = innerQuery;
+              }
+            }
+            
+            console.log(`Searching CourtListener for: "${query}"`);
             const searchResult = await courtListener.searchCases(query);
             const cases = searchResult.results || [];
+            console.log(`Found ${cases.length} cases (out of ${searchResult.count} total)`);
             
             for (const caseData of cases) {
               allResults.push(
@@ -149,13 +167,13 @@ const createLegalSearchChain = (llm: BaseChatModel, embeddings: Embeddings) => {
                     court: caseData.court,
                     date: caseData.date_filed,
                     courtListenerId: caseData.id,
-                    url: caseData.absolute_url || `https://www.courtlistener.com/opinion/${caseData.id}/`
+                    url: caseData.absolute_url ? `https://www.courtlistener.com${caseData.absolute_url}` : ''
                   },
                 })
               );
             }
           } catch (error) {
-            console.error('CourtListener search error:', error);
+            console.error('CourtListener search error for query:', query, error);
           }
         }
         
